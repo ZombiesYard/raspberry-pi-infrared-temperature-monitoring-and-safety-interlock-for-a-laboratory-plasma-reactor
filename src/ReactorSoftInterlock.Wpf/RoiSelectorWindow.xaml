@@ -1,0 +1,27 @@
+<Window x:Class="ReactorSoftInterlock.Wpf.RoiSelectorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="#22000000"
+        Topmost="True"
+        ShowInTaskbar="False"
+        Cursor="Cross">
+  <Canvas x:Name="SelectionCanvas">
+    <Rectangle x:Name="TargetWindowRectangle"
+               Stroke="#009688"
+               StrokeThickness="2"
+               Fill="#11009688" />
+    <Rectangle x:Name="SelectionRectangle"
+               Stroke="#D00000"
+               StrokeThickness="2"
+               Fill="#22D00000"
+               Visibility="Collapsed" />
+    <TextBlock Text="Drag over the HikmicroAnalyzer max-temperature text, then release. Press Esc to cancel."
+               Canvas.Left="20"
+               Canvas.Top="20"
+               Background="White"
+               Padding="8"
+               FontSize="16" />
+  </Canvas>
+</Window>

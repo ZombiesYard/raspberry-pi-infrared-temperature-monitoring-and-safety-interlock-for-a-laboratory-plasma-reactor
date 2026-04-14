@@ -8,6 +8,12 @@
 stages:
 - test
 - secret-detection
+dotnet-test:
+  stage: test
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  script:
+  - dotnet restore src/ReactorSoftInterlock.sln
+  - dotnet test src/ReactorSoftInterlock.sln --configuration Release --no-restore
 sast:
   stage: test
 include:

@@ -1,0 +1,45 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ReactorSoftInterlock.Domain", "ReactorSoftInterlock.Domain\ReactorSoftInterlock.Domain.csproj", "{B70B587C-5AF6-4B9C-9A88-3712CF3D8B27}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ReactorSoftInterlock.Application", "ReactorSoftInterlock.Application\ReactorSoftInterlock.Application.csproj", "{09C5A853-AD60-43B4-AF80-A57D28D6E7B7}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ReactorSoftInterlock.Infrastructure", "ReactorSoftInterlock.Infrastructure\ReactorSoftInterlock.Infrastructure.csproj", "{2455603F-93C0-4DBD-A670-F5478E4DE41F}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ReactorSoftInterlock.Wpf", "ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj", "{7768C4E2-58A6-4B4E-B7E5-D3F75CF52ED1}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ReactorSoftInterlock.Tests", "..\tests\ReactorSoftInterlock.Tests\ReactorSoftInterlock.Tests.csproj", "{3155F43B-2263-4C8E-B463-E706648AD608}"
+EndProject
+Global
+  GlobalSection(SolutionConfigurationPlatforms) = preSolution
+    Debug|Any CPU = Debug|Any CPU
+    Release|Any CPU = Release|Any CPU
+  EndGlobalSection
+  GlobalSection(ProjectConfigurationPlatforms) = postSolution
+    {B70B587C-5AF6-4B9C-9A88-3712CF3D8B27}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {B70B587C-5AF6-4B9C-9A88-3712CF3D8B27}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {B70B587C-5AF6-4B9C-9A88-3712CF3D8B27}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {B70B587C-5AF6-4B9C-9A88-3712CF3D8B27}.Release|Any CPU.Build.0 = Release|Any CPU
+    {09C5A853-AD60-43B4-AF80-A57D28D6E7B7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {09C5A853-AD60-43B4-AF80-A57D28D6E7B7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {09C5A853-AD60-43B4-AF80-A57D28D6E7B7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {09C5A853-AD60-43B4-AF80-A57D28D6E7B7}.Release|Any CPU.Build.0 = Release|Any CPU
+    {2455603F-93C0-4DBD-A670-F5478E4DE41F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {2455603F-93C0-4DBD-A670-F5478E4DE41F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {2455603F-93C0-4DBD-A670-F5478E4DE41F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {2455603F-93C0-4DBD-A670-F5478E4DE41F}.Release|Any CPU.Build.0 = Release|Any CPU
+    {7768C4E2-58A6-4B4E-B7E5-D3F75CF52ED1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {7768C4E2-58A6-4B4E-B7E5-D3F75CF52ED1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {7768C4E2-58A6-4B4E-B7E5-D3F75CF52ED1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {7768C4E2-58A6-4B4E-B7E5-D3F75CF52ED1}.Release|Any CPU.Build.0 = Release|Any CPU
+    {3155F43B-2263-4C8E-B463-E706648AD608}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {3155F43B-2263-4C8E-B463-E706648AD608}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {3155F43B-2263-4C8E-B463-E706648AD608}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {3155F43B-2263-4C8E-B463-E706648AD608}.Release|Any CPU.Build.0 = Release|Any CPU
+  EndGlobalSection
+  GlobalSection(SolutionProperties) = preSolution
+    HideSolutionNode = FALSE
+  EndGlobalSection
+EndGlobal

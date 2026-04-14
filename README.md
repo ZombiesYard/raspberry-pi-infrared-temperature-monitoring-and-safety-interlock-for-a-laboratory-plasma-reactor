@@ -1,5 +1,19 @@
 # Raspberry Pi Based Infrared Temperature Monitoring and Safety Interlock for a Laboratory Plasma Reactor
 
+This repository now contains a Windows desktop prototype for a G2000 plasma generator soft interlock.
+
+The app is implemented as a C# / WPF / .NET 8 solution in `src/ReactorSoftInterlock.sln`. It captures a user-selected region of the HikmicroAnalyzer window, runs Tesseract OCR against that region, parses the highest visible temperature, logs every sample to CSV, and trips a USB serial relay when the temperature reaches or exceeds 90.0 C.
+
+Quick start on Windows:
+
+```powershell
+dotnet restore .\src\ReactorSoftInterlock.sln
+dotnet test .\src\ReactorSoftInterlock.sln
+dotnet run --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj
+```
+
+See `docs/g2000-soft-interlock.md` for hardware wiring guidance, Tesseract setup, relay configuration, and the normal operating workflow.
+
 
 
 ## Getting started
