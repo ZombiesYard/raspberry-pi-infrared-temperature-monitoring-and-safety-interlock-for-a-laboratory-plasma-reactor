@@ -1,107 +1,249 @@
-# Raspberry Pi Based Infrared Temperature Monitoring and Safety Interlock for a Laboratory Plasma Reactor
+# G2000 Temperature Soft Interlock
 
-This repository now contains a Windows desktop prototype for a G2000 plasma generator soft interlock.
+Windows desktop prototype for monitoring a laboratory plasma reactor with a HIKMICRO infrared camera workflow.
 
-The app is implemented as a C# / WPF / .NET 8 solution in `src/ReactorSoftInterlock.sln`. It captures a user-selected region of the HikmicroAnalyzer window, runs Tesseract OCR against that region, parses the highest visible temperature, logs every sample to CSV, and trips a USB serial relay when the temperature reaches or exceeds 90.0 C.
+The prototype watches the HikmicroAnalyzer window, takes a screenshot of the user-selected temperature text area, reads the text with Tesseract OCR, parses the highest visible temperature, writes every sample to CSV, and trips a USB serial relay when the temperature reaches or exceeds the configured threshold. The default threshold is `90.0 C`.
 
-Quick start on Windows:
+The relay is intended to be wired as a passive dry contact into the G2000 external interlock / emergency-stop loop. The project does not use the HIKMICRO camera API because the current portable camera workflow exposes the needed temperature information through the HikmicroAnalyzer UI.
+
+## Repository Layout
+
+- `src/ReactorSoftInterlock.sln`: Visual Studio / .NET solution.
+- `src/ReactorSoftInterlock.Wpf`: WPF desktop application.
+- `src/ReactorSoftInterlock.Domain`: threshold, sample, relay action, and latched trip state logic.
+- `src/ReactorSoftInterlock.Application`: monitoring loop, OCR text parsing, and application ports.
+- `src/ReactorSoftInterlock.Infrastructure`: window capture, Tesseract CLI adapter, serial relay, CSV log, settings.
+- `tests/ReactorSoftInterlock.Tests`: unit and integration-style tests for the core logic.
+- `docs/g2000-soft-interlock.md`: hardware notes and lab operating workflow.
+- `Doc`: project and G2000 manual PDFs.
+- `HikmicroAnalyzer`: sample HIKMICRO images for reference.
+
+## What The App Does
+
+1. Finds a visible HikmicroAnalyzer window by title text.
+2. Lets the user drag-select the region of interest (ROI) containing the maximum temperature text.
+3. Periodically captures that ROI from the screen.
+4. Runs Tesseract OCR on the captured image.
+5. Parses values such as `Max 89.9 C`, `90.1°C`, or `最高 90.0 C`.
+6. Logs every reading, OCR text, status, relay action, and ROI to CSV.
+7. Enters `Tripped` when any valid reading is `>= ThresholdC`.
+8. Sends the relay stop command once and stays latched until a manual reset below the threshold.
+
+If OCR fails or no valid temperature is found, the app records `NO READING` and does not trip the relay from that sample.
+
+## Requirements
+
+Development machine:
+
+- Windows 10 or later.
+- Visual Studio 2022 with `.NET desktop development`, or .NET 8 SDK.
+- Internet access for first-time NuGet package restore.
+
+Runtime / lab machine:
+
+- Windows 10 or later.
+- HikmicroAnalyzer running with the maximum temperature overlay visible.
+- Tesseract OCR for Windows.
+- USB serial relay and its Windows driver, if using real relay output.
+- G2000 interlock wiring prepared according to the lab setup.
+
+Install Tesseract:
+
+1. Install a Windows Tesseract build.
+2. Either add `tesseract.exe` to `PATH`, or put the full path into the app's `Tesseract` field.
+3. English OCR data is enough for the default configuration because the parser mainly needs digits and `C`.
+
+## Build From Source
+
+Open PowerShell in the repository root:
+
+```powershell
+cd "L:\Documents\files\Yu Zhang TU Clausthal\ProjectShukang\raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor"
+```
+
+Restore dependencies:
 
 ```powershell
 dotnet restore .\src\ReactorSoftInterlock.sln
+```
+
+Run tests:
+
+```powershell
 dotnet test .\src\ReactorSoftInterlock.sln
+```
+
+Build Debug:
+
+```powershell
+dotnet build .\src\ReactorSoftInterlock.sln
+```
+
+Build Release:
+
+```powershell
+dotnet build .\src\ReactorSoftInterlock.sln -c Release
+```
+
+The WPF executable is produced under:
+
+```text
+src\ReactorSoftInterlock.Wpf\bin\Release\net8.0-windows\
+```
+
+## Run From Source
+
+From the repository root:
+
+```powershell
 dotnet run --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj
 ```
 
-See `docs/g2000-soft-interlock.md` for hardware wiring guidance, Tesseract setup, relay configuration, and the normal operating workflow.
+For Release mode:
 
-
-
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.tu-clausthal.de/yz50/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor.git
-git branch -M main
-git push -uf origin main
+```powershell
+dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj
 ```
 
-## Integrate with your tools
+You can also open `src/ReactorSoftInterlock.sln` in Visual Studio 2022, set `ReactorSoftInterlock.Wpf` as the startup project, and press `F5`.
 
-* [Set up project integrations](https://gitlab.tu-clausthal.de/yz50/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/-/settings/integrations)
+## First Run Workflow
 
-## Collaborate with your team
+1. Start HikmicroAnalyzer.
+2. Make the maximum temperature overlay visible.
+3. Keep HikmicroAnalyzer visible, preferably maximized.
+4. Start `ReactorSoftInterlock.Wpf`.
+5. Set `Window` to a stable substring of the HikmicroAnalyzer window title, for example `Hikmicro`.
+6. Set `Tesseract` to `tesseract.exe` or the full executable path.
+7. Keep `Dry run relay` enabled for the first OCR test.
+8. Click `Save Settings`.
+9. Click `Select ROI`.
+10. Drag only around the maximum temperature text and release.
+11. Click `Start`.
+12. Watch `Temperature`, `Raw OCR text`, and the history table.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+The ROI is screen/window-position dependent. If HikmicroAnalyzer is moved, resized, minimized, hidden behind another window, or the Windows display scale changes, select the ROI again.
 
-## Test and Deploy
+## Relay Configuration
 
-Use the built-in continuous integration in GitLab.
+The first version intentionally uses configurable HEX commands instead of a hard-coded relay model.
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+Fields:
 
-***
+- `Dry run relay`: when checked, the app simulates relay actions and does not write to the serial port.
+- `COM Port`: Windows serial port, for example `COM3`.
+- `Baud`: relay baud rate, for example `9600`.
+- `Stop HEX`: bytes sent when the temperature trips the interlock.
+- `Reset HEX`: bytes sent when the operator resets the relay from the UI.
 
-# Editing this README
+Example HEX formats accepted by the parser:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```text
+A0 01 00 A1
+A0-01-00-A1
+A0:01:00:A1
+```
 
-## Suggestions for a good README
+Recommended commissioning order:
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+1. Keep `Dry run relay` enabled.
+2. Verify OCR is stable.
+3. Connect the USB relay and confirm the COM port in Windows Device Manager.
+4. Enter the relay's stop/reset HEX commands.
+5. Click `Test Relay Stop`.
+6. Verify the relay contact changes with a multimeter.
+7. Wire the relay contact as a passive contact in the G2000 external interlock / emergency-stop loop.
+8. Disable `Dry run relay` only after the contact behavior has been verified.
 
-## Name
-Choose a self-explaining name for your project.
+## Normal Lab Operation
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Before enabling plasma:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+1. Confirm HikmicroAnalyzer is visible and not covered by other windows.
+2. Confirm the app shows a valid live temperature.
+3. Confirm the threshold is `90.0 C` unless intentionally changed.
+4. Confirm `Test Relay Stop` disables or opens the intended G2000 interlock path.
+5. Click `Start`.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+During operation:
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+- `Monitoring`: valid readings below threshold.
+- `NoReading`: OCR did not produce a valid temperature; sample is logged, relay is not tripped from that sample.
+- `Tripped`: threshold reached or exceeded; stop command has been sent once and the state is latched.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+After a trip:
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+1. Stop or cool the process as required by the lab procedure.
+2. Wait until the app reads a valid temperature below the threshold.
+3. Click `Reset`.
+4. Start monitoring again if needed.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## CSV Logging
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+The app writes history to:
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+```text
+src\ReactorSoftInterlock.Wpf\bin\<Configuration>\net8.0-windows\data\temperature-history.csv
+```
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+CSV columns:
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+```text
+timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot_roi
+```
 
-## License
-For open source projects, say how it is licensed.
+Use `Export CSV` in the UI to copy the current history file to a selected location.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## Configuration File
+
+The app creates and updates `appsettings.json` next to the executable.
+
+Important fields:
+
+- `ThresholdC`: default `90.0`.
+- `PollIntervalMs`: default `1000`.
+- `WindowTitleContains`: window title filter used to find HikmicroAnalyzer.
+- `Roi`: saved after `Select ROI`.
+- `Ocr.TesseractExePath`: `tesseract.exe` or full path.
+- `Ocr.Language`: default `eng`.
+- `Relay.DryRun`: default `true`.
+- `Relay.PortName`: default `COM3`.
+- `Relay.BaudRate`: default `9600`.
+- `Relay.StopCommandHex`: stop command bytes.
+- `Relay.ResetCommandHex`: reset command bytes.
+- `DataDirectory`: default `data`.
+
+## Test Coverage
+
+Current tests cover:
+
+- OCR temperature text parsing.
+- `89.9 C` below-threshold behavior.
+- `90.0 C` and `90.1 C` trip behavior.
+- Latched trip sends stop only once.
+- Reset is allowed only below threshold with a valid reading.
+- HEX relay command parsing.
+- CSV header and sample output.
+- Monitoring service integration with fake OCR reader and fake relay.
+
+Run:
+
+```powershell
+dotnet test .\src\ReactorSoftInterlock.sln
+```
+
+Expected current result:
+
+```text
+Passed: 16, Failed: 0, Skipped: 0
+```
+
+## Notes
+
+- HikmicroAnalyzer does not need to be maximized, but it must stay visible and stable. Maximized is recommended for lab use.
+- Do not minimize HikmicroAnalyzer while monitoring.
+- Do not cover the selected temperature text with another window.
+- If OCR is unreliable, reselect a tighter ROI around the temperature text.
+- If the HikmicroAnalyzer theme or overlay changes, reselect ROI and verify the raw OCR text before enabling the real relay.
+
+More hardware-specific notes are in `docs/g2000-soft-interlock.md`.
