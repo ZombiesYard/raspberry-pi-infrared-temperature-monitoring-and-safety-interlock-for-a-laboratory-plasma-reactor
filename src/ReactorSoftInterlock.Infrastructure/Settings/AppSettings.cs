@@ -2,7 +2,15 @@ namespace ReactorSoftInterlock.Infrastructure.Settings;
 
 public sealed class AppSettings
 {
+    public string Language { get; set; } = "en";
+
     public double ThresholdC { get; set; } = 90.0;
+
+    public bool AutoResetEnabled { get; set; } = true;
+
+    public double RecoveryThresholdC { get; set; } = 85.0;
+
+    public int RecoveryStableSeconds { get; set; } = 30;
 
     public int PollIntervalMs { get; set; } = 1000;
 

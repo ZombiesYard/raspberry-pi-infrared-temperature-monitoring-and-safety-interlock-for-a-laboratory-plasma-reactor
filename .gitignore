@@ -6,3 +6,6 @@ TestResults/
 *.user
 *.suo
 src/ReactorSoftInterlock.Wpf/data/
+artifacts/
+src/Backup/
+src/UpgradeLog.htm
