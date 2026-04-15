@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using Microsoft.Win32;
 using ReactorSoftInterlock.Application;
 using ReactorSoftInterlock.Application.Ports;
@@ -12,6 +14,8 @@ using ReactorSoftInterlock.Infrastructure.Logging;
 using ReactorSoftInterlock.Infrastructure.Ocr;
 using ReactorSoftInterlock.Infrastructure.Relay;
 using ReactorSoftInterlock.Infrastructure.Settings;
+using ChartLine = System.Windows.Shapes.Line;
+using ChartPolyline = System.Windows.Shapes.Polyline;
 
 namespace ReactorSoftInterlock.Wpf;
 
@@ -26,6 +30,8 @@ public partial class MainWindow : Window
     private MonitoringService? _monitoringService;
     private CancellationTokenSource? _monitoringCts;
     private double? _lastTemperatureC;
+    private MonitorStatus _currentStatus = MonitorStatus.Idle;
+    private bool _isBindingSettings;
 
     public MainWindow()
     {
@@ -39,9 +45,17 @@ public partial class MainWindow : Window
     {
         _settingsStore = new SettingsStore(_settingsPath);
         _settings = await _settingsStore.LoadAsync(CancellationToken.None);
+        LanguageBox.ItemsSource = new[]
+        {
+            new LanguageOption("en", "English"),
+            new LanguageOption("zh-CN", "中文"),
+            new LanguageOption("de", "Deutsch")
+        };
         BindSettingsToUi();
+        ApplyLanguage();
         BuildServices();
         await LoadRecentHistoryAsync();
+        DrawTemperatureChart();
     }
 
     private void MainWindow_Closed(object? sender, EventArgs e)
@@ -69,7 +83,7 @@ public partial class MainWindow : Window
             _settings.Roi.Width = (int)Math.Max(1, selected.Width);
             _settings.Roi.Height = (int)Math.Max(1, selected.Height);
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
-            FooterText.Text = $"ROI saved: {_settings.Roi}";
+            FooterText.Text = $"{T("footer.roiSaved")}: {_settings.Roi}";
             BuildServices();
         }
         catch (Exception ex)
@@ -90,8 +104,8 @@ public partial class MainWindow : Window
             await SaveSettingsFromUiAsync();
             BuildServices();
             _monitoringCts = new CancellationTokenSource();
-            StatusText.Text = "Monitoring";
-            FooterText.Text = "Monitoring started.";
+            SetStatus(MonitorStatus.Monitoring);
+            FooterText.Text = T("footer.monitoringStarted");
             _ = Task.Run(() => _monitoringService!.RunAsync(TimeSpan.FromMilliseconds(_settings.PollIntervalMs), _monitoringCts.Token));
         }
         catch (Exception ex)
@@ -102,7 +116,7 @@ public partial class MainWindow : Window
 
     private void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        StopMonitoring("Monitoring stopped.");
+        StopMonitoring(T("footer.monitoringStopped"));
     }
 
     private async void ResetButton_Click(object sender, RoutedEventArgs e)
@@ -111,15 +125,15 @@ public partial class MainWindow : Window
         {
             if (!_stateMachine.CanReset(_lastTemperatureC))
             {
-                MessageBox.Show(this, "Reset is allowed only after a valid temperature below the threshold is read.", "Reset blocked", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(this, T("message.resetBlocked"), T("message.resetBlockedTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
             var relayAction = await CreateRelay().ResetAsync(CancellationToken.None);
             _stateMachine.Reset(_lastTemperatureC);
-            StatusText.Text = "Monitoring";
+            SetStatus(MonitorStatus.Monitoring);
             AlarmReasonText.Text = string.Empty;
-            FooterText.Text = $"Reset complete: {relayAction}.";
+            FooterText.Text = $"{T("footer.resetComplete")}: {relayAction}.";
         }
         catch (Exception ex)
         {
@@ -133,7 +147,7 @@ public partial class MainWindow : Window
         {
             await SaveSettingsFromUiAsync();
             var action = await CreateRelay().TestStopAsync(CancellationToken.None);
-            FooterText.Text = $"Relay test completed: {action}.";
+            FooterText.Text = $"{T("footer.relayTestComplete")}: {action}.";
         }
         catch (Exception ex)
         {
@@ -157,7 +171,7 @@ public partial class MainWindow : Window
             }
 
             await _sampleLog.ExportAsync(dialog.FileName, CancellationToken.None);
-            FooterText.Text = $"CSV exported: {dialog.FileName}";
+            FooterText.Text = $"{T("footer.csvExported")}: {dialog.FileName}";
         }
         catch (Exception ex)
         {
@@ -171,7 +185,7 @@ public partial class MainWindow : Window
         {
             await SaveSettingsFromUiAsync();
             BuildServices();
-            FooterText.Text = $"Settings saved: {_settingsPath}";
+            FooterText.Text = $"{T("footer.settingsSaved")}: {_settingsPath}";
         }
         catch (Exception ex)
         {
@@ -188,7 +202,8 @@ public partial class MainWindow : Window
         _sampleLog = new CsvSampleLog(Path.Combine(dataDirectory, "temperature-history.csv"));
         _stateMachine = new InterlockStateMachine(new InterlockSettings(_settings.ThresholdC));
         var reader = new TesseractCliTemperatureReader(new WindowCapture(), new TemperatureTextParser(), _settings);
-        _monitoringService = new MonitoringService(reader, CreateRelay(), _sampleLog, new SystemClock(), _stateMachine);
+        var autoReset = new AutoResetOptions(_settings.AutoResetEnabled, _settings.RecoveryThresholdC, _settings.RecoveryStableSeconds);
+        _monitoringService = new MonitoringService(reader, CreateRelay(), _sampleLog, new SystemClock(), _stateMachine, autoReset);
         _monitoringService.SampleRecorded += MonitoringService_SampleRecorded;
     }
 
@@ -214,11 +229,11 @@ public partial class MainWindow : Window
                 ? "NO READING"
                 : $"{sample.TemperatureC.Value:0.0} C";
             RawOcrText.Text = string.IsNullOrWhiteSpace(sample.RawOcrText) ? "(empty OCR text)" : sample.RawOcrText;
-            StatusText.Text = sample.Status.ToString();
+            SetStatus(sample.Status);
             AlarmReasonText.Text = sample.AlarmReason;
             FooterText.Text = sample.RelayAction == RelayAction.StopSent
-                ? "TRIPPED: relay stop command sent."
-                : $"Last sample: {sample.Timestamp:HH:mm:ss}";
+                ? T("footer.tripped")
+                : $"{T("footer.lastSample")}: {sample.Timestamp:HH:mm:ss}";
 
             if (sample.Status == MonitorStatus.Tripped)
             {
@@ -230,6 +245,8 @@ public partial class MainWindow : Window
                 StatusText.Foreground = System.Windows.Media.Brushes.Black;
                 TemperatureText.Foreground = System.Windows.Media.Brushes.Black;
             }
+
+            DrawTemperatureChart();
         });
     }
 
@@ -239,6 +256,8 @@ public partial class MainWindow : Window
         {
             _history.Insert(0, sample);
         }
+
+        DrawTemperatureChart();
     }
 
     private void StopMonitoring(string message)
@@ -246,14 +265,18 @@ public partial class MainWindow : Window
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
         _monitoringCts = null;
-        StatusText.Text = _stateMachine.IsTripped ? "Tripped" : "Idle";
+        SetStatus(_stateMachine.IsTripped ? MonitorStatus.Tripped : MonitorStatus.Idle);
         FooterText.Text = message;
     }
 
     private void BindSettingsToUi()
     {
+        _isBindingSettings = true;
+        LanguageBox.SelectedValue = NormalizeLanguage(_settings.Language);
         WindowTitleBox.Text = _settings.WindowTitleContains;
         ThresholdBox.Text = _settings.ThresholdC.ToString("0.0", CultureInfo.InvariantCulture);
+        RecoveryThresholdBox.Text = _settings.RecoveryThresholdC.ToString("0.0", CultureInfo.InvariantCulture);
+        StableSecondsBox.Text = _settings.RecoveryStableSeconds.ToString(CultureInfo.InvariantCulture);
         TesseractPathBox.Text = _settings.Ocr.TesseractExePath;
         IntervalBox.Text = _settings.PollIntervalMs.ToString(CultureInfo.InvariantCulture);
         PortBox.Text = _settings.Relay.PortName;
@@ -261,12 +284,18 @@ public partial class MainWindow : Window
         StopHexBox.Text = _settings.Relay.StopCommandHex;
         ResetHexBox.Text = _settings.Relay.ResetCommandHex;
         DryRunBox.IsChecked = _settings.Relay.DryRun;
+        AutoResetBox.IsChecked = _settings.AutoResetEnabled;
+        _isBindingSettings = false;
     }
 
     private async Task SaveSettingsFromUiAsync()
     {
+        _settings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? _settings.Language);
         _settings.WindowTitleContains = WindowTitleBox.Text.Trim();
         _settings.ThresholdC = ParseDouble(ThresholdBox.Text, nameof(_settings.ThresholdC));
+        _settings.RecoveryThresholdC = ParseDouble(RecoveryThresholdBox.Text, nameof(_settings.RecoveryThresholdC));
+        _settings.RecoveryStableSeconds = ParseInt(StableSecondsBox.Text, nameof(_settings.RecoveryStableSeconds));
+        _settings.AutoResetEnabled = AutoResetBox.IsChecked == true;
         _settings.PollIntervalMs = ParseInt(IntervalBox.Text, nameof(_settings.PollIntervalMs));
         _settings.Ocr.TesseractExePath = TesseractPathBox.Text.Trim();
         _settings.Relay.PortName = PortBox.Text.Trim();
@@ -275,6 +304,193 @@ public partial class MainWindow : Window
         _settings.Relay.ResetCommandHex = ResetHexBox.Text.Trim();
         _settings.Relay.DryRun = DryRunBox.IsChecked == true;
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+    }
+
+    private async void LanguageBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isBindingSettings || _settings is null)
+        {
+            return;
+        }
+
+        _settings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? "en");
+        ApplyLanguage();
+        await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+    }
+
+    private void TemperatureChartCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        DrawTemperatureChart();
+    }
+
+    private void ApplyLanguage()
+    {
+        Title = T("app.title");
+        TitleText.Text = T("app.title");
+        SubtitleText.Text = T("app.subtitle");
+        StatusLabel.Text = T("label.status");
+        TemperatureGroup.Header = T("group.temperature");
+        ControlsGroup.Header = T("group.controls");
+        ConfigurationGroup.Header = T("group.configuration");
+        ChartGroup.Header = T("group.chart");
+        SelectRoiButton.Content = T("button.selectRoi");
+        StartButton.Content = T("button.start");
+        StopButton.Content = T("button.stop");
+        ResetButton.Content = T("button.reset");
+        TestRelayButton.Content = T("button.testRelay");
+        ExportButton.Content = T("button.export");
+        SaveSettingsButton.Content = T("button.save");
+        WindowLabel.Text = T("label.window");
+        ThresholdLabel.Text = T("label.threshold");
+        TesseractLabel.Text = T("label.tesseract");
+        IntervalLabel.Text = T("label.interval");
+        PortLabel.Text = T("label.com");
+        BaudLabel.Text = T("label.baud");
+        StopHexLabel.Text = T("label.stopHex");
+        ResetHexLabel.Text = T("label.resetHex");
+        LanguageLabel.Text = T("label.language");
+        RecoveryLabel.Text = T("label.recovery");
+        StableSecondsLabel.Text = T("label.stable");
+        DryRunBox.Content = T("check.dryRun");
+        AutoResetBox.Content = T("check.autoReset");
+        TimeColumn.Header = T("grid.time");
+        TemperatureColumn.Header = T("grid.temp");
+        StatusColumn.Header = T("grid.status");
+        RelayColumn.Header = T("grid.relay");
+        ReasonColumn.Header = T("grid.reason");
+        RoiColumn.Header = T("grid.roi");
+        SetStatus(_currentStatus);
+        if (FooterText.Text == "Ready." || FooterText.Text == UiText.Get("en", "footer.ready"))
+        {
+            FooterText.Text = T("footer.ready");
+        }
+
+        DrawTemperatureChart();
+    }
+
+    private void DrawTemperatureChart()
+    {
+        if (_settings is null || TemperatureChartCanvas.ActualWidth <= 10 || TemperatureChartCanvas.ActualHeight <= 10)
+        {
+            return;
+        }
+
+        TemperatureChartCanvas.Children.Clear();
+        var width = TemperatureChartCanvas.ActualWidth;
+        var height = TemperatureChartCanvas.ActualHeight;
+        const double left = 44;
+        const double right = 12;
+        const double top = 14;
+        const double bottom = 28;
+        var plotWidth = Math.Max(1, width - left - right);
+        var plotHeight = Math.Max(1, height - top - bottom);
+        var samples = _history.Reverse().TakeLast(500).ToList();
+        var valid = samples.Where(static sample => sample.TemperatureC is not null).ToList();
+
+        DrawLine(left, top, left, top + plotHeight, Brushes.LightGray, 1);
+        DrawLine(left, top + plotHeight, left + plotWidth, top + plotHeight, Brushes.LightGray, 1);
+
+        if (valid.Count == 0)
+        {
+            AddChartText(T("chart.noData"), left + 8, top + 12, Brushes.Gray);
+            return;
+        }
+
+        var minTemp = Math.Min(valid.Min(static sample => sample.TemperatureC!.Value), _settings.RecoveryThresholdC) - 3;
+        var maxTemp = Math.Max(valid.Max(static sample => sample.TemperatureC!.Value), _settings.ThresholdC) + 3;
+        if (Math.Abs(maxTemp - minTemp) < 1)
+        {
+            maxTemp += 1;
+            minTemp -= 1;
+        }
+
+        double X(int index) => left + (samples.Count <= 1 ? 0 : index * plotWidth / (samples.Count - 1));
+        double Y(double temp) => top + (maxTemp - temp) * plotHeight / (maxTemp - minTemp);
+
+        DrawReferenceLine(_settings.ThresholdC, Brushes.DarkRed, $"{T("chart.threshold")} {_settings.ThresholdC:0.0} C", left, plotWidth, Y);
+        DrawReferenceLine(_settings.RecoveryThresholdC, Brushes.SeaGreen, $"{T("chart.recovery")} {_settings.RecoveryThresholdC:0.0} C", left, plotWidth, Y);
+
+        var currentPoints = new PointCollection();
+        for (var i = 0; i < samples.Count; i++)
+        {
+            var temp = samples[i].TemperatureC;
+            if (temp is null)
+            {
+                AddPolyline(currentPoints);
+                currentPoints = new PointCollection();
+                continue;
+            }
+
+            currentPoints.Add(new Point(X(i), Y(temp.Value)));
+        }
+
+        AddPolyline(currentPoints);
+        AddChartText($"{maxTemp:0} C", 4, top - 4, Brushes.Gray);
+        AddChartText($"{minTemp:0} C", 4, top + plotHeight - 10, Brushes.Gray);
+    }
+
+    private void DrawReferenceLine(double temp, Brush brush, string label, double left, double plotWidth, Func<double, double> yFactory)
+    {
+        var y = yFactory(temp);
+        DrawLine(left, y, left + plotWidth, y, brush, 1);
+        AddChartText(label, left + 6, y - 18, brush);
+    }
+
+    private void DrawLine(double x1, double y1, double x2, double y2, Brush brush, double thickness)
+    {
+        TemperatureChartCanvas.Children.Add(new ChartLine
+        {
+            X1 = x1,
+            Y1 = y1,
+            X2 = x2,
+            Y2 = y2,
+            Stroke = brush,
+            StrokeThickness = thickness
+        });
+    }
+
+    private void AddPolyline(PointCollection points)
+    {
+        if (points.Count < 2)
+        {
+            return;
+        }
+
+        TemperatureChartCanvas.Children.Add(new ChartPolyline
+        {
+            Points = points,
+            Stroke = Brushes.DodgerBlue,
+            StrokeThickness = 2
+        });
+    }
+
+    private void AddChartText(string text, double x, double y, Brush brush)
+    {
+        var block = new TextBlock
+        {
+            Text = text,
+            Foreground = brush,
+            FontSize = 11
+        };
+        Canvas.SetLeft(block, x);
+        Canvas.SetTop(block, y);
+        TemperatureChartCanvas.Children.Add(block);
+    }
+
+    private void SetStatus(MonitorStatus status)
+    {
+        _currentStatus = status;
+        StatusText.Text = T($"status.{status}");
+    }
+
+    private string T(string key)
+    {
+        return UiText.Get(NormalizeLanguage(_settings?.Language ?? "en"), key);
+    }
+
+    private static string NormalizeLanguage(string language)
+    {
+        return language is "zh-CN" or "de" ? language : "en";
     }
 
     private static double ParseDouble(string text, string name)

@@ -18,11 +18,11 @@
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
         <StackPanel>
-          <TextBlock Text="G2000 Temperature Soft Interlock" FontSize="24" FontWeight="SemiBold" />
-          <TextBlock Text="HikmicroAnalyzer OCR -> 90 C trip -> USB relay interlock" Margin="0,4,0,0" />
+          <TextBlock x:Name="TitleText" Text="G2000 Temperature Soft Interlock" FontSize="24" FontWeight="SemiBold" />
+          <TextBlock x:Name="SubtitleText" Text="HikmicroAnalyzer OCR -> 90 C trip -> USB relay interlock" Margin="0,4,0,0" />
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock Text="Status:" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
+          <TextBlock x:Name="StatusLabel" Text="Status:" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" />
           <TextBlock x:Name="StatusText" Text="Idle" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" />
         </StackPanel>
       </Grid>
@@ -35,7 +35,7 @@
         <ColumnDefinition Width="3*" />
       </Grid.ColumnDefinitions>
 
-      <GroupBox Header="Temperature" Padding="10" Margin="0,0,8,0">
+      <GroupBox x:Name="TemperatureGroup" Header="Temperature" Padding="10" Margin="0,0,8,0">
         <StackPanel>
           <TextBlock x:Name="TemperatureText" Text="NO READING" FontSize="36" FontWeight="Bold" />
           <TextBlock x:Name="RawOcrText" Text="Raw OCR text appears here." TextWrapping="Wrap" Margin="0,8,0,0" />
@@ -43,7 +43,7 @@
         </StackPanel>
       </GroupBox>
 
-      <GroupBox Grid.Column="1" Header="Controls" Padding="10" Margin="0,0,8,0">
+      <GroupBox x:Name="ControlsGroup" Grid.Column="1" Header="Controls" Padding="10" Margin="0,0,8,0">
         <UniformGrid Columns="2" Rows="3">
           <Button x:Name="SelectRoiButton" Content="Select ROI" Click="SelectRoiButton_Click" Margin="4" MinHeight="38" />
           <Button x:Name="StartButton" Content="Start" Click="StartButton_Click" Margin="4" MinHeight="38" />
@@ -54,7 +54,7 @@
         </UniformGrid>
       </GroupBox>
 
-      <GroupBox Grid.Column="2" Header="Configuration" Padding="10">
+      <GroupBox x:Name="ConfigurationGroup" Grid.Column="2" Header="Configuration" Padding="10">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto" />
@@ -68,44 +68,68 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
           </Grid.RowDefinitions>
 
-          <TextBlock Text="Window" Grid.Row="0" Grid.Column="0" Margin="0,4,8,4" />
+          <TextBlock x:Name="WindowLabel" Text="Window" Grid.Row="0" Grid.Column="0" Margin="0,4,8,4" />
           <TextBox x:Name="WindowTitleBox" Grid.Row="0" Grid.Column="1" Margin="0,2,12,2" />
-          <TextBlock Text="Threshold C" Grid.Row="0" Grid.Column="2" Margin="0,4,8,4" />
+          <TextBlock x:Name="ThresholdLabel" Text="Threshold C" Grid.Row="0" Grid.Column="2" Margin="0,4,8,4" />
           <TextBox x:Name="ThresholdBox" Grid.Row="0" Grid.Column="3" Margin="0,2,0,2" />
 
-          <TextBlock Text="Tesseract" Grid.Row="1" Grid.Column="0" Margin="0,4,8,4" />
+          <TextBlock x:Name="TesseractLabel" Text="Tesseract" Grid.Row="1" Grid.Column="0" Margin="0,4,8,4" />
           <TextBox x:Name="TesseractPathBox" Grid.Row="1" Grid.Column="1" Margin="0,2,12,2" />
-          <TextBlock Text="Interval ms" Grid.Row="1" Grid.Column="2" Margin="0,4,8,4" />
+          <TextBlock x:Name="IntervalLabel" Text="Interval ms" Grid.Row="1" Grid.Column="2" Margin="0,4,8,4" />
           <TextBox x:Name="IntervalBox" Grid.Row="1" Grid.Column="3" Margin="0,2,0,2" />
 
-          <TextBlock Text="COM Port" Grid.Row="2" Grid.Column="0" Margin="0,4,8,4" />
+          <TextBlock x:Name="PortLabel" Text="COM Port" Grid.Row="2" Grid.Column="0" Margin="0,4,8,4" />
           <TextBox x:Name="PortBox" Grid.Row="2" Grid.Column="1" Margin="0,2,12,2" />
-          <TextBlock Text="Baud" Grid.Row="2" Grid.Column="2" Margin="0,4,8,4" />
+          <TextBlock x:Name="BaudLabel" Text="Baud" Grid.Row="2" Grid.Column="2" Margin="0,4,8,4" />
           <TextBox x:Name="BaudBox" Grid.Row="2" Grid.Column="3" Margin="0,2,0,2" />
 
-          <TextBlock Text="Stop HEX" Grid.Row="3" Grid.Column="0" Margin="0,4,8,4" />
+          <TextBlock x:Name="StopHexLabel" Text="Stop HEX" Grid.Row="3" Grid.Column="0" Margin="0,4,8,4" />
           <TextBox x:Name="StopHexBox" Grid.Row="3" Grid.Column="1" Margin="0,2,12,2" />
-          <TextBlock Text="Reset HEX" Grid.Row="3" Grid.Column="2" Margin="0,4,8,4" />
+          <TextBlock x:Name="ResetHexLabel" Text="Reset HEX" Grid.Row="3" Grid.Column="2" Margin="0,4,8,4" />
           <TextBox x:Name="ResetHexBox" Grid.Row="3" Grid.Column="3" Margin="0,2,0,2" />
 
-          <CheckBox x:Name="DryRunBox" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Content="Dry run relay" Margin="0,4,0,4" />
-          <Button x:Name="SaveSettingsButton" Grid.Row="4" Grid.Column="2" Grid.ColumnSpan="2" Content="Save Settings" Click="SaveSettingsButton_Click" Margin="0,2,0,2" />
+          <TextBlock x:Name="LanguageLabel" Text="Language" Grid.Row="4" Grid.Column="0" Margin="0,4,8,4" />
+          <ComboBox x:Name="LanguageBox" Grid.Row="4" Grid.Column="1" Margin="0,2,12,2" DisplayMemberPath="DisplayName" SelectedValuePath="Code" SelectionChanged="LanguageBox_SelectionChanged" />
+          <TextBlock x:Name="RecoveryLabel" Text="Recovery C" Grid.Row="4" Grid.Column="2" Margin="0,4,8,4" />
+          <TextBox x:Name="RecoveryThresholdBox" Grid.Row="4" Grid.Column="3" Margin="0,2,0,2" />
+
+          <CheckBox x:Name="DryRunBox" Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Content="Dry run relay" Margin="0,4,0,4" />
+          <CheckBox x:Name="AutoResetBox" Grid.Row="5" Grid.Column="2" Content="Auto reset" Margin="0,4,8,4" />
+          <StackPanel Grid.Row="5" Grid.Column="3" Orientation="Horizontal">
+            <TextBlock x:Name="StableSecondsLabel" Text="Stable sec" VerticalAlignment="Center" Margin="0,0,6,0" />
+            <TextBox x:Name="StableSecondsBox" Width="60" />
+          </StackPanel>
+
+          <Button x:Name="SaveSettingsButton" Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="4" Content="Save Settings" Click="SaveSettingsButton_Click" Margin="0,4,0,2" />
         </Grid>
       </GroupBox>
     </Grid>
 
-    <DataGrid x:Name="HistoryGrid" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True">
-      <DataGrid.Columns>
-        <DataGridTextColumn Header="Time" Binding="{Binding Timestamp}" Width="190" />
-        <DataGridTextColumn Header="Temp C" Binding="{Binding TemperatureC}" Width="90" />
-        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="110" />
-        <DataGridTextColumn Header="Relay" Binding="{Binding RelayAction}" Width="110" />
-        <DataGridTextColumn Header="Reason" Binding="{Binding AlarmReason}" Width="*" />
-        <DataGridTextColumn Header="ROI" Binding="{Binding ScreenshotRoi}" Width="180" />
-      </DataGrid.Columns>
-    </DataGrid>
+    <Grid Grid.Row="2">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*" />
+        <RowDefinition Height="170" />
+      </Grid.RowDefinitions>
+
+      <DataGrid x:Name="HistoryGrid" Grid.Row="0" AutoGenerateColumns="False" IsReadOnly="True">
+        <DataGrid.Columns>
+          <DataGridTextColumn x:Name="TimeColumn" Header="Time" Binding="{Binding Timestamp}" Width="190" />
+          <DataGridTextColumn x:Name="TemperatureColumn" Header="Temp C" Binding="{Binding TemperatureC}" Width="90" />
+          <DataGridTextColumn x:Name="StatusColumn" Header="Status" Binding="{Binding Status}" Width="110" />
+          <DataGridTextColumn x:Name="RelayColumn" Header="Relay" Binding="{Binding RelayAction}" Width="110" />
+          <DataGridTextColumn x:Name="ReasonColumn" Header="Reason" Binding="{Binding AlarmReason}" Width="*" />
+          <DataGridTextColumn x:Name="RoiColumn" Header="ROI" Binding="{Binding ScreenshotRoi}" Width="180" />
+        </DataGrid.Columns>
+      </DataGrid>
+
+      <GroupBox x:Name="ChartGroup" Grid.Row="1" Header="Temperature Trend" Margin="0,8,0,0">
+        <Canvas x:Name="TemperatureChartCanvas" Background="White" SizeChanged="TemperatureChartCanvas_SizeChanged" />
+      </GroupBox>
+    </Grid>
 
     <TextBlock x:Name="FooterText" Grid.Row="3" Text="Ready." Margin="0,10,0,0" />
   </Grid>

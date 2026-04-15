@@ -10,19 +10,23 @@ public sealed class MonitoringService
     private readonly ISampleLog _sampleLog;
     private readonly IClock _clock;
     private readonly InterlockStateMachine _stateMachine;
+    private readonly AutoResetOptions _autoResetOptions;
+    private DateTimeOffset? _recoveryStableSince;
 
     public MonitoringService(
         ITemperatureReader temperatureReader,
         IRelayController relayController,
         ISampleLog sampleLog,
         IClock clock,
-        InterlockStateMachine stateMachine)
+        InterlockStateMachine stateMachine,
+        AutoResetOptions? autoResetOptions = null)
     {
         _temperatureReader = temperatureReader;
         _relayController = relayController;
         _sampleLog = sampleLog;
         _clock = clock;
         _stateMachine = stateMachine;
+        _autoResetOptions = autoResetOptions ?? new AutoResetOptions(Enabled: false);
     }
 
     public event EventHandler<TemperatureSample>? SampleRecorded;
@@ -38,18 +42,67 @@ public sealed class MonitoringService
             relayAction = await _relayController.StopAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        var status = decision.Status;
+        var alarmReason = decision.AlarmReason;
+
+        if (_stateMachine.IsTripped && !decision.ShouldSendStop)
+        {
+            var autoResetDecision = await TryAutoResetAsync(reading.TemperatureC, cancellationToken).ConfigureAwait(false);
+            if (autoResetDecision is not null)
+            {
+                status = autoResetDecision.Status;
+                alarmReason = autoResetDecision.AlarmReason;
+                relayAction = autoResetDecision.RelayAction;
+            }
+        }
+
         var sample = new TemperatureSample(
             _clock.Now,
             reading.TemperatureC,
             reading.RawText,
-            decision.Status,
-            decision.AlarmReason,
+            status,
+            alarmReason,
             relayAction,
             reading.RoiDescription);
 
         await _sampleLog.AppendAsync(sample, cancellationToken).ConfigureAwait(false);
         SampleRecorded?.Invoke(this, sample);
         return sample;
+    }
+
+    private async Task<InterlockDecision?> TryAutoResetAsync(double? temperatureC, CancellationToken cancellationToken)
+    {
+        if (!_autoResetOptions.Enabled)
+        {
+            _recoveryStableSince = null;
+            return null;
+        }
+
+        if (temperatureC is null ||
+            temperatureC.Value >= _autoResetOptions.RecoveryThresholdC ||
+            !_stateMachine.CanReset(temperatureC))
+        {
+            _recoveryStableSince = null;
+            return null;
+        }
+
+        var now = _clock.Now;
+        _recoveryStableSince ??= now;
+        var stableFor = now - _recoveryStableSince.Value;
+        if (stableFor < TimeSpan.FromSeconds(_autoResetOptions.StableSeconds))
+        {
+            return null;
+        }
+
+        var relayAction = await _relayController.ResetAsync(cancellationToken).ConfigureAwait(false);
+        _stateMachine.Reset(temperatureC);
+        _recoveryStableSince = null;
+
+        return new InterlockDecision(
+            MonitorStatus.Monitoring,
+            relayAction,
+            $"Auto reset after temperature stayed below {_autoResetOptions.RecoveryThresholdC:0.0} C for {_autoResetOptions.StableSeconds} s.",
+            ShouldSendStop: false);
     }
 
     public async Task RunAsync(TimeSpan interval, CancellationToken cancellationToken)

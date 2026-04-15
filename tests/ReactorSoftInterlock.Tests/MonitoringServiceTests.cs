@@ -30,6 +30,126 @@ public sealed class MonitoringServiceTests
         Assert.Equal(MonitorStatus.Tripped, log.Samples.Last().Status);
     }
 
+    [Fact]
+    public async Task AutoResetWaitsForStableRecoveryPeriod()
+    {
+        var reader = new QueueTemperatureReader(
+            new TemperatureReading(91.0, "Max 91.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"));
+        var relay = new CountingRelay();
+        var log = new InMemorySampleLog();
+        var clock = new MutableClock(DateTimeOffset.Parse("2026-04-14T12:00:00+02:00"));
+        var service = CreateService(reader, relay, log, clock, new AutoResetOptions(true, 85.0, 30));
+
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(10));
+        await service.PollOnceAsync(CancellationToken.None);
+        Assert.Equal(0, relay.ResetCount);
+
+        clock.Advance(TimeSpan.FromSeconds(30));
+        await service.PollOnceAsync(CancellationToken.None);
+
+        Assert.Equal(1, relay.StopCount);
+        Assert.Equal(1, relay.ResetCount);
+        Assert.Equal(RelayAction.ResetSent, log.Samples.Last().RelayAction);
+        Assert.Equal(MonitorStatus.Monitoring, log.Samples.Last().Status);
+    }
+
+    [Fact]
+    public async Task AutoResetRecoveryTimerIsClearedByNoReading()
+    {
+        var reader = new QueueTemperatureReader(
+            new TemperatureReading(91.0, "Max 91.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"),
+            new TemperatureReading(null, "NO READING", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"));
+        var relay = new CountingRelay();
+        var log = new InMemorySampleLog();
+        var clock = new MutableClock(DateTimeOffset.Parse("2026-04-14T12:00:00+02:00"));
+        var service = CreateService(reader, relay, log, clock, new AutoResetOptions(true, 85.0, 30));
+
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(40));
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await service.PollOnceAsync(CancellationToken.None);
+        Assert.Equal(0, relay.ResetCount);
+
+        clock.Advance(TimeSpan.FromSeconds(30));
+        await service.PollOnceAsync(CancellationToken.None);
+
+        Assert.Equal(1, relay.ResetCount);
+    }
+
+    [Fact]
+    public async Task AutoResetCanBeDisabled()
+    {
+        var reader = new QueueTemperatureReader(
+            new TemperatureReading(91.0, "Max 91.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"));
+        var relay = new CountingRelay();
+        var log = new InMemorySampleLog();
+        var clock = new MutableClock(DateTimeOffset.Parse("2026-04-14T12:00:00+02:00"));
+        var service = CreateService(reader, relay, log, clock, new AutoResetOptions(false, 85.0, 30));
+
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await service.PollOnceAsync(CancellationToken.None);
+
+        Assert.Equal(1, relay.StopCount);
+        Assert.Equal(0, relay.ResetCount);
+        Assert.Equal(MonitorStatus.Tripped, log.Samples.Last().Status);
+    }
+
+    [Fact]
+    public async Task TripsAgainAfterAutoReset()
+    {
+        var reader = new QueueTemperatureReader(
+            new TemperatureReading(91.0, "Max 91.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"),
+            new TemperatureReading(84.0, "Max 84.0 C", "roi"),
+            new TemperatureReading(91.0, "Max 91.0 C", "roi"));
+        var relay = new CountingRelay();
+        var log = new InMemorySampleLog();
+        var clock = new MutableClock(DateTimeOffset.Parse("2026-04-14T12:00:00+02:00"));
+        var service = CreateService(reader, relay, log, clock, new AutoResetOptions(true, 85.0, 30));
+
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(30));
+        await service.PollOnceAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await service.PollOnceAsync(CancellationToken.None);
+
+        Assert.Equal(2, relay.StopCount);
+        Assert.Equal(1, relay.ResetCount);
+        Assert.Equal(MonitorStatus.Tripped, log.Samples.Last().Status);
+    }
+
+    private static MonitoringService CreateService(
+        ITemperatureReader reader,
+        IRelayController relay,
+        ISampleLog log,
+        IClock clock,
+        AutoResetOptions options)
+    {
+        return new MonitoringService(
+            reader,
+            relay,
+            log,
+            clock,
+            new InterlockStateMachine(new InterlockSettings(90.0)),
+            options);
+    }
+
     private sealed class QueueTemperatureReader : ITemperatureReader
     {
         private readonly Queue<TemperatureReading> _readings;
@@ -49,6 +169,8 @@ public sealed class MonitoringServiceTests
     {
         public int StopCount { get; private set; }
 
+        public int ResetCount { get; private set; }
+
         public Task<RelayAction> StopAsync(CancellationToken cancellationToken)
         {
             StopCount++;
@@ -57,6 +179,7 @@ public sealed class MonitoringServiceTests
 
         public Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
         {
+            ResetCount++;
             return Task.FromResult(RelayAction.ResetSent);
         }
 
@@ -90,5 +213,20 @@ public sealed class MonitoringServiceTests
     private sealed class FixedClock : IClock
     {
         public DateTimeOffset Now => DateTimeOffset.Parse("2026-04-14T12:00:00+02:00");
+    }
+
+    private sealed class MutableClock : IClock
+    {
+        public MutableClock(DateTimeOffset now)
+        {
+            Now = now;
+        }
+
+        public DateTimeOffset Now { get; private set; }
+
+        public void Advance(TimeSpan value)
+        {
+            Now = Now.Add(value);
+        }
     }
 }
