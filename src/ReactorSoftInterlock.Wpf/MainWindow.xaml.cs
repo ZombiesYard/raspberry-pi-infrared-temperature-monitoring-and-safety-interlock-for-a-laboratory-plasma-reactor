@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.IO.Ports;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -102,11 +103,16 @@ public partial class MainWindow : Window
             }
 
             await SaveSettingsFromUiAsync();
+            if (!ValidateMonitoringSetup())
+            {
+                return;
+            }
+
             BuildServices();
             _monitoringCts = new CancellationTokenSource();
             SetStatus(MonitorStatus.Monitoring);
             FooterText.Text = T("footer.monitoringStarted");
-            _ = Task.Run(() => _monitoringService!.RunAsync(TimeSpan.FromMilliseconds(_settings.PollIntervalMs), _monitoringCts.Token));
+            _ = Task.Run(() => RunMonitoringLoopAsync(_monitoringCts.Token));
         }
         catch (Exception ex)
         {
@@ -146,6 +152,11 @@ public partial class MainWindow : Window
         try
         {
             await SaveSettingsFromUiAsync();
+            if (!ValidateRelaySetup(requireResetHex: false))
+            {
+                return;
+            }
+
             var action = await CreateRelay().TestStopAsync(CancellationToken.None);
             FooterText.Text = $"{T("footer.relayTestComplete")}: {action}.";
         }
@@ -212,6 +223,121 @@ public partial class MainWindow : Window
         return _settings.Relay.DryRun
             ? new DryRunRelayController()
             : new SerialRelayController(_settings.Relay);
+    }
+
+    private async Task RunMonitoringLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _monitoringService!.RunAsync(TimeSpan.FromMilliseconds(_settings.PollIntervalMs), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal stop path.
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                StopMonitoring(T("footer.monitoringStopped"));
+                ShowError(ex);
+            });
+        }
+    }
+
+    private bool ValidateMonitoringSetup()
+    {
+        if (!_settings.Roi.IsConfigured)
+        {
+            ShowSetupWarning(T("message.roiMissing"));
+            return false;
+        }
+
+        if (!ExecutableExists(_settings.Ocr.TesseractExePath))
+        {
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.tesseractMissing"), _settings.Ocr.TesseractExePath));
+            return false;
+        }
+
+        try
+        {
+            _ = new WindowCapture().GetWindowBounds(_settings.WindowTitleContains);
+        }
+        catch
+        {
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hikmicroMissing"), _settings.WindowTitleContains));
+            return false;
+        }
+
+        return ValidateRelaySetup(requireResetHex: true);
+    }
+
+    private bool ValidateRelaySetup(bool requireResetHex)
+    {
+        if (_settings.Relay.DryRun)
+        {
+            return true;
+        }
+
+        var availablePorts = SerialPort.GetPortNames();
+        if (!availablePorts.Contains(_settings.Relay.PortName, StringComparer.OrdinalIgnoreCase))
+        {
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.comMissing"), _settings.Relay.PortName));
+            return false;
+        }
+
+        if (!ValidateHexCommand(_settings.Relay.StopCommandHex, T("label.stopHex")))
+        {
+            return false;
+        }
+
+        return !requireResetHex || ValidateHexCommand(_settings.Relay.ResetCommandHex, T("label.resetHex"));
+    }
+
+    private bool ValidateHexCommand(string hex, string label)
+    {
+        try
+        {
+            if (HexCommandParser.Parse(hex).Length == 0)
+            {
+                ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexMissing"), label));
+                return false;
+            }
+        }
+        catch (FormatException ex)
+        {
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexInvalid"), label, ex.Message));
+            return false;
+        }
+        catch (OverflowException ex)
+        {
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexInvalid"), label, ex.Message));
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ExecutableExists(string executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath))
+        {
+            return false;
+        }
+
+        if (Path.IsPathFullyQualified(executablePath) || executablePath.Contains(Path.DirectorySeparatorChar) || executablePath.Contains(Path.AltDirectorySeparatorChar))
+        {
+            return File.Exists(executablePath);
+        }
+
+        if (File.Exists(Path.Combine(AppContext.BaseDirectory, executablePath)))
+        {
+            return true;
+        }
+
+        var paths = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return paths.Any(path => File.Exists(Path.Combine(path, executablePath)));
     }
 
     private void MonitoringService_SampleRecorded(object? sender, TemperatureSample sample)
@@ -517,5 +643,11 @@ public partial class MainWindow : Window
     {
         FooterText.Text = ex.Message;
         MessageBox.Show(this, ex.Message, "G2000 Soft Interlock", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    private void ShowSetupWarning(string message)
+    {
+        FooterText.Text = message;
+        MessageBox.Show(this, message, T("message.setupRequiredTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 }

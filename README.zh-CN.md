@@ -29,7 +29,8 @@
 6. 每条样本写入 CSV。
 7. 任何有效读数 `>= ThresholdC` 时进入 `Tripped`。
 8. `Tripped` 时只发送一次继电器停止命令，并保持锁存。
-9. 只有读到低于阈值的有效温度后，才能人工 `Reset`。
+9. 只有读到低于阈值的有效温度后，才允许人工 `Reset`。
+10. 如果启用 `Auto reset`，温度连续低于 `Recovery C` 并保持到设定稳定时间后，软件会自动发送继电器复位命令。
 
 如果 OCR 失败，软件记录 `NO READING`。单独的 `NO READING` 不会触发继电器。
 
@@ -61,6 +62,27 @@
 - USB 串口继电器及其 Windows 驱动。
 - 已确认的 G2000 external interlock / Not-Aus 接线点。
 - 万用表，用于在接入 G2000 前检查继电器触点。
+
+## 安装所需组件
+
+实验室电脑优先使用 self-contained Release 包。这个包已经带上本软件需要的 .NET runtime，所以实验室电脑通常不需要单独安装 .NET。实验室电脑仍然需要安装 HikmicroAnalyzer、Tesseract OCR、USB 继电器驱动，并完成正确的继电器/G2000 接线。
+
+实验室电脑安装步骤：
+
+1. 安装 HikmicroAnalyzer，并确认相机画面和最高温叠加文字都能显示。
+2. 安装 Windows 版 Tesseract OCR。安装后，可以把 Tesseract 安装目录加入 `PATH`，也可以在软件的 `Tesseract` 字段中填写 `tesseract.exe` 的完整路径。
+3. 安装 USB 串口继电器驱动。常见继电器板可能使用 CH340、CH341、CP210x 或 FTDI 驱动，按继电器板型号选择。
+4. 打开 Windows 设备管理器，展开 `Ports (COM & LPT)`，插入继电器，记录出现的 `COMx`。
+5. 在 OCR 和继电器空载测试完成前，保持 `Dry run relay` 勾选。
+6. 根据 G2000 手册和实验室实际接线确认 external interlock / Not-Aus 回路需要“打开”还是“闭合”来禁止高压。
+
+开发电脑安装步骤：
+
+1. 安装 Visual Studio 2022。
+2. 在 Visual Studio Installer 中选择 `.NET desktop development` 工作负载。
+3. 确认单个组件中安装了 `.NET 8.0 SDK`，或单独安装 .NET 8 SDK。
+4. 如果 Visual Studio 提示解决方案不受支持，请安装 `.NET desktop development`，关闭 Visual Studio 后重新打开 `src/ReactorSoftInterlock.sln`。
+5. 如果 Visual Studio 提示进行非功能性 solution 更改，可以接受；但 solution 中必须保留 Debug 和 Release 配置。
 
 ## 从源代码构建
 
@@ -94,6 +116,14 @@ dotnet build .\src\ReactorSoftInterlock.sln -c Release
 src\ReactorSoftInterlock.Wpf\bin\Release\net8.0-windows\
 ```
 
+生成实验室部署用的 self-contained 包：
+
+```powershell
+dotnet publish .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj -c Release -r win-x64 --self-contained true -o .\artifacts\ReactorSoftInterlock-win-x64
+```
+
+生成的文件夹可以压缩后复制到实验室电脑。里面包含 `ReactorSoftInterlock.Wpf.exe` 和软件需要的 .NET runtime 文件。
+
 ## 启动软件
 
 从源码运行：
@@ -109,6 +139,14 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 ```
 
 也可以用 Visual Studio 2022 打开 `src/ReactorSoftInterlock.sln`，把 `ReactorSoftInterlock.Wpf` 设为启动项目，然后按 `F5`。
+
+运行实验室 Release 包：
+
+1. 解压 `ReactorSoftInterlock-win-x64-latest.zip`。
+2. 双击运行 `ReactorSoftInterlock.Wpf.exe`。
+3. 如果 Windows SmartScreen 弹出提示，先确认文件来自本项目，再继续运行。
+4. 保持 `appsettings.json` 和 exe 在同一目录；点击保存设置时软件会更新这个文件。
+5. 如果软件提示缺少 Tesseract、ROI、HikmicroAnalyzer、COM 口或 HEX 命令，先按提示修好，再开始监控。
 
 ## 第一次软件配置
 
@@ -225,8 +263,9 @@ Dry Run 含义：
 1. 确认 plasma 已停止或进入预期安全状态。
 2. 保留 CSV 记录。
 3. 等待软件读到低于阈值的有效温度。
-4. 点击 `Reset`。
-5. 重新确认 OCR 和继电器状态，再继续实验。
+4. 如果关闭了 `Auto reset`，点击 `Reset`。
+5. 如果启用了 `Auto reset`，确认温度连续低于 `Recovery C` 并达到稳定时间后继电器才复位。
+6. 重新确认 OCR 和继电器状态，再继续实验。
 
 ## 状态含义
 
@@ -339,6 +378,10 @@ timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot
 - `Relay.StopCommandHex`：停止命令字节。
 - `Relay.ResetCommandHex`：复位命令字节。
 - `DataDirectory`：默认 `data`。
+- `Language`：`en`、`zh-CN` 或 `de`。
+- `AutoResetEnabled`：默认 `true`。
+- `RecoveryThresholdC`：默认 `85.0`。
+- `RecoveryStableSeconds`：默认 `30`。
 
 ## 开发者测试命令
 
@@ -349,5 +392,5 @@ dotnet test .\src\ReactorSoftInterlock.sln
 当前预期：
 
 ```text
-Passed: 16, Failed: 0, Skipped: 0
+Passed: 20, Failed: 0, Skipped: 0
 ```

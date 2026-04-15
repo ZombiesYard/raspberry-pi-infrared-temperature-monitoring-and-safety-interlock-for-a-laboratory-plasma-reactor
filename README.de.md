@@ -29,7 +29,8 @@ Die Software verwendet keine HIKMICRO-Kamera-API. Sie liest das sichtbare Overla
 6. Jede Messung wird in CSV geschrieben.
 7. Bei einem gültigen Messwert `>= ThresholdC` wechselt die Software in `Tripped`.
 8. In `Tripped` wird der Stop-Befehl einmal gesendet und der Zustand bleibt verriegelt.
-9. Reset ist erst möglich, wenn ein gültiger Temperaturwert unterhalb des Schwellwerts gelesen wurde.
+9. Manueller Reset ist erst möglich, wenn ein gültiger Temperaturwert unterhalb des Schwellwerts gelesen wurde.
+10. Wenn `Auto reset` aktiviert ist, sendet die Software den Relais-Reset automatisch, nachdem die Temperatur für die eingestellte stabile Zeit unter `Recovery C` geblieben ist.
 
 Wenn OCR fehlschlägt, wird `NO READING` protokolliert. Ein einzelner `NO READING`-Wert löst das Relais nicht aus.
 
@@ -61,6 +62,27 @@ Labor-PC:
 - USB-Seriell-Relais und passender Windows-Treiber.
 - Bestätigter G2000 external interlock / Not-Aus Anschluss.
 - Multimeter zur Prüfung der Relaiskontakte vor Anschluss an den G2000.
+
+## Erforderliche Komponenten installieren
+
+Für den Labor-PC möglichst das self-contained Release-Paket verwenden. Dieses Paket enthält die .NET Runtime, die die App benötigt. Deshalb muss auf dem Labor-PC normalerweise keine separate .NET Runtime installiert werden. Der Labor-PC benötigt trotzdem HikmicroAnalyzer, Tesseract OCR, den USB-Relais-Treiber und die korrekte Relais/G2000-Verdrahtung.
+
+Installation auf dem Labor-PC:
+
+1. HikmicroAnalyzer installieren und prüfen, dass Kamerabild und Maximaltemperatur-Overlay sichtbar sind.
+2. Tesseract OCR für Windows installieren. Danach entweder den Tesseract-Installationsordner zu `PATH` hinzufügen oder den vollständigen Pfad zu `tesseract.exe` in das App-Feld `Tesseract` eintragen.
+3. Den USB-Seriell-Relais-Treiber installieren. Häufige Relaisboards verwenden CH340, CH341, CP210x oder FTDI; den zum Board passenden Treiber verwenden.
+4. Windows Geräte-Manager öffnen, `Ports (COM & LPT)` erweitern, das Relais einstecken und den angezeigten `COMx`-Wert notieren.
+5. `Dry run relay` aktiviert lassen, bis OCR funktioniert und das Relais ohne G2000 getestet wurde.
+6. Mit G2000-Handbuch und Laborverdrahtung bestätigen, ob der external interlock / Not-Aus Kreis geöffnet oder geschlossen werden muss, um Hochspannung zu sperren.
+
+Installation auf einem Entwicklungs-PC:
+
+1. Visual Studio 2022 installieren.
+2. Im Visual Studio Installer den Workload `.NET desktop development` auswählen.
+3. Sicherstellen, dass `.NET 8.0 SDK` in den Einzelkomponenten installiert ist, oder das .NET 8 SDK separat installieren.
+4. Wenn Visual Studio die Solution als nicht unterstützt öffnet, `.NET desktop development` installieren, Visual Studio schließen und `src/ReactorSoftInterlock.sln` erneut öffnen.
+5. Wenn Visual Studio nichtfunktionale Solution-Änderungen anbietet, kann das akzeptiert werden; Debug- und Release-Konfigurationen müssen aber erhalten bleiben.
 
 ## Aus dem Quellcode bauen
 
@@ -94,6 +116,14 @@ Die ausführbaren Dateien liegen danach hier:
 src\ReactorSoftInterlock.Wpf\bin\Release\net8.0-windows\
 ```
 
+Das self-contained Paket für den Labor-PC erzeugen:
+
+```powershell
+dotnet publish .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj -c Release -r win-x64 --self-contained true -o .\artifacts\ReactorSoftInterlock-win-x64
+```
+
+Der veröffentlichte Ordner kann gezippt und auf den Labor-PC kopiert werden. Er enthält `ReactorSoftInterlock.Wpf.exe` und die von der App benötigten .NET Runtime-Dateien.
+
 ## Starten
 
 Aus dem Quellcode starten:
@@ -109,6 +139,14 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 ```
 
 Alternativ `src/ReactorSoftInterlock.sln` in Visual Studio 2022 öffnen, `ReactorSoftInterlock.Wpf` als Startprojekt auswählen und `F5` drücken.
+
+Labor-Release-Paket starten:
+
+1. `ReactorSoftInterlock-win-x64-latest.zip` entpacken.
+2. `ReactorSoftInterlock.Wpf.exe` starten.
+3. Falls Windows SmartScreen erscheint, zuerst bestätigen, dass die Datei aus diesem Projekt stammt.
+4. `appsettings.json` neben der EXE belassen; die App aktualisiert diese Datei beim Speichern der Einstellungen.
+5. Wenn die App meldet, dass Tesseract, ROI, HikmicroAnalyzer, COM-Port oder HEX-Befehle fehlen, diesen Punkt zuerst beheben und erst danach die Überwachung starten.
 
 ## Erste Software-Einrichtung
 
@@ -225,8 +263,9 @@ Dry Run:
 1. Prüfen, dass Plasma gestoppt wurde oder der gewünschte sichere Zustand erreicht ist.
 2. CSV-Protokoll sichern.
 3. Warten, bis die App einen gültigen Wert unterhalb des Schwellwerts liest.
-4. `Reset` klicken.
-5. OCR und Relaiszustand erneut prüfen, bevor fortgefahren wird.
+4. Wenn `Auto reset` deaktiviert ist, `Reset` klicken.
+5. Wenn `Auto reset` aktiviert ist, prüfen, dass der Relais-Reset erst nach stabiler Temperatur unter `Recovery C` erfolgt.
+6. OCR und Relaiszustand erneut prüfen, bevor fortgefahren wird.
 
 ## Status Bedeutung
 
@@ -339,6 +378,10 @@ Wichtige Felder:
 - `Relay.StopCommandHex`: Stop-Befehlsbytes.
 - `Relay.ResetCommandHex`: Reset-Befehlsbytes.
 - `DataDirectory`: Standard `data`.
+- `Language`: `en`, `zh-CN` oder `de`.
+- `AutoResetEnabled`: Standard `true`.
+- `RecoveryThresholdC`: Standard `85.0`.
+- `RecoveryStableSeconds`: Standard `30`.
 
 ## Entwicklertest
 
@@ -349,5 +392,5 @@ dotnet test .\src\ReactorSoftInterlock.sln
 Aktuell erwartet:
 
 ```text
-Passed: 16, Failed: 0, Skipped: 0
+Passed: 20, Failed: 0, Skipped: 0
 ```

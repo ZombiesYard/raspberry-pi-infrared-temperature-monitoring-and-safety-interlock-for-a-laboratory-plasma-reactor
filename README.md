@@ -29,7 +29,8 @@ The app does not use a HIKMICRO API. It reads the visible HikmicroAnalyzer overl
 6. Every sample is written to CSV.
 7. When a valid temperature is `>= ThresholdC`, the app enters `Tripped`.
 8. In `Tripped`, the stop relay command is sent once and the state stays latched.
-9. Reset is only allowed after a valid temperature below the threshold is read.
+9. Manual reset is only allowed after a valid temperature below the threshold is read.
+10. If `Auto reset` is enabled, the relay reset command is sent automatically after the temperature stays below `Recovery C` for the configured stable time.
 
 If OCR fails, the app records `NO READING`. A `NO READING` sample does not trigger the relay by itself.
 
@@ -61,6 +62,27 @@ Laboratory PC:
 - USB serial relay and its Windows driver.
 - G2000 external interlock / Not-Aus connection confirmed by the lab setup.
 - Multimeter for checking relay contact behavior before connecting to the G2000.
+
+## Install Required Components
+
+For a normal laboratory PC, use the self-contained Release package when possible. It includes the .NET runtime needed by the app, so the lab PC usually does not need a separate .NET installation. The lab PC still needs HikmicroAnalyzer, Tesseract OCR, the USB relay driver, and the correct relay/G2000 wiring.
+
+Install on the lab PC:
+
+1. Install HikmicroAnalyzer and confirm that the camera image and maximum temperature overlay are visible.
+2. Install Tesseract OCR for Windows. After installation, either add the Tesseract installation folder to `PATH`, or copy the full path to `tesseract.exe` into the app field `Tesseract`.
+3. Install the USB serial relay driver. Common relay boards use CH340, CH341, CP210x, or FTDI drivers; use the driver matching the relay board.
+4. Open Windows Device Manager, expand `Ports (COM & LPT)`, plug the relay in, and note the `COMx` value.
+5. Keep `Dry run relay` enabled until OCR is working and the relay has been tested without the G2000.
+6. Confirm with the G2000 manual and the lab wiring which external interlock / Not-Aus contact pair must be opened or closed to disable high voltage.
+
+Install on a development PC:
+
+1. Install Visual Studio 2022.
+2. In Visual Studio Installer, select the workload `.NET desktop development`.
+3. Make sure `.NET 8.0 SDK` is installed in the individual components, or install the .NET 8 SDK separately.
+4. If Visual Studio opens the solution as unsupported, install `.NET desktop development`, close Visual Studio, and reopen `src/ReactorSoftInterlock.sln`.
+5. If Visual Studio asks for non-functional solution changes, it is safe to accept; the solution must still contain Debug and Release configurations.
 
 ## Build From Source
 
@@ -94,6 +116,14 @@ The executable is built under:
 src\ReactorSoftInterlock.Wpf\bin\Release\net8.0-windows\
 ```
 
+Create the same self-contained package used for lab deployment:
+
+```powershell
+dotnet publish .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj -c Release -r win-x64 --self-contained true -o .\artifacts\ReactorSoftInterlock-win-x64
+```
+
+The published folder can be zipped and moved to the lab PC. It contains `ReactorSoftInterlock.Wpf.exe` and the .NET runtime files needed by the app.
+
 ## Run
 
 Run from source:
@@ -109,6 +139,14 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 ```
 
 You can also open `src/ReactorSoftInterlock.sln` in Visual Studio 2022, set `ReactorSoftInterlock.Wpf` as the startup project, and press `F5`.
+
+Run the lab Release package:
+
+1. Unzip `ReactorSoftInterlock-win-x64-latest.zip`.
+2. Run `ReactorSoftInterlock.Wpf.exe`.
+3. If Windows SmartScreen appears, confirm that the file came from this project before continuing.
+4. Keep `appsettings.json` next to the executable; the app updates it when settings are saved.
+5. If the app warns that Tesseract, ROI, HikmicroAnalyzer, COM port, or HEX commands are missing, fix that item before starting monitoring.
 
 ## First Software Setup
 
@@ -227,7 +265,8 @@ After trip:
 - Confirm plasma has stopped or entered the intended safe state.
 - Keep the CSV log for the experiment record.
 - Wait until the app reads a valid temperature below the threshold.
-- Click `Reset`.
+- If `Auto reset` is disabled, click `Reset`.
+- If `Auto reset` is enabled, confirm that the relay reset happens only after temperature stays below `Recovery C` for the configured stable time.
 - Re-check OCR and relay state before continuing.
 
 ## Status Meaning
@@ -341,6 +380,10 @@ Important fields:
 - `Relay.StopCommandHex`: stop command bytes.
 - `Relay.ResetCommandHex`: reset command bytes.
 - `DataDirectory`: default `data`.
+- `Language`: `en`, `zh-CN`, or `de`.
+- `AutoResetEnabled`: default `true`.
+- `RecoveryThresholdC`: default `85.0`.
+- `RecoveryStableSeconds`: default `30`.
 
 ## Developer Test Command
 
@@ -351,5 +394,5 @@ dotnet test .\src\ReactorSoftInterlock.sln
 Expected current result:
 
 ```text
-Passed: 16, Failed: 0, Skipped: 0
+Passed: 20, Failed: 0, Skipped: 0
 ```
