@@ -1,57 +1,66 @@
 # G2000 Temperature Soft Interlock
 
+Language: [English](README.md) | [中文](README.zh-CN.md) | [Deutsch](README.de.md)
+
 Windows desktop prototype for monitoring a laboratory plasma reactor with a HIKMICRO infrared camera workflow.
 
-The prototype watches the HikmicroAnalyzer window, takes a screenshot of the user-selected temperature text area, reads the text with Tesseract OCR, parses the highest visible temperature, writes every sample to CSV, and trips a USB serial relay when the temperature reaches or exceeds the configured threshold. The default threshold is `90.0 C`.
+The software watches the HikmicroAnalyzer window, captures a selected temperature text area, reads it with Tesseract OCR, parses the highest visible temperature, logs readings to CSV, and sends a USB serial relay command when the temperature reaches or exceeds `90.0 C`.
 
-The relay is intended to be wired as a passive dry contact into the G2000 external interlock / emergency-stop loop. The project does not use the HIKMICRO camera API because the current portable camera workflow exposes the needed temperature information through the HikmicroAnalyzer UI.
+This project is a laboratory prototype. It is intended to help stop the plasma generator by opening or switching the confirmed G2000 external interlock / emergency-stop path. It is not a certified industrial safety controller.
+
+## System Overview
+
+The full setup has four parts:
+
+- HIKMICRO camera and HikmicroAnalyzer: displays the live thermal image and accurate temperature overlay.
+- This WPF application: captures the temperature text from the screen and decides whether to trip.
+- USB serial relay: receives HEX commands from the Windows PC.
+- G2000 plasma generator interlock / Not-Aus loop: the relay contact is wired as a passive dry contact into the confirmed external interlock path.
+
+The app does not use a HIKMICRO API. It reads the visible HikmicroAnalyzer overlay by screenshot OCR.
+
+## How The App Works
+
+1. It finds a visible HikmicroAnalyzer window using the `Window` title filter.
+2. The user selects a region of interest (ROI) around the maximum temperature text.
+3. The app periodically screenshots that ROI.
+4. Tesseract OCR converts the screenshot to text.
+5. The parser extracts temperatures such as `Max 89.9 C`, `90.1°C`, or `最高 90.0 C`.
+6. Every sample is written to CSV.
+7. When a valid temperature is `>= ThresholdC`, the app enters `Tripped`.
+8. In `Tripped`, the stop relay command is sent once and the state stays latched.
+9. Reset is only allowed after a valid temperature below the threshold is read.
+
+If OCR fails, the app records `NO READING`. A `NO READING` sample does not trigger the relay by itself.
 
 ## Repository Layout
 
 - `src/ReactorSoftInterlock.sln`: Visual Studio / .NET solution.
 - `src/ReactorSoftInterlock.Wpf`: WPF desktop application.
-- `src/ReactorSoftInterlock.Domain`: threshold, sample, relay action, and latched trip state logic.
-- `src/ReactorSoftInterlock.Application`: monitoring loop, OCR text parsing, and application ports.
-- `src/ReactorSoftInterlock.Infrastructure`: window capture, Tesseract CLI adapter, serial relay, CSV log, settings.
-- `tests/ReactorSoftInterlock.Tests`: unit and integration-style tests for the core logic.
-- `docs/g2000-soft-interlock.md`: hardware notes and lab operating workflow.
-- `Doc`: project and G2000 manual PDFs.
-- `HikmicroAnalyzer`: sample HIKMICRO images for reference.
-
-## What The App Does
-
-1. Finds a visible HikmicroAnalyzer window by title text.
-2. Lets the user drag-select the region of interest (ROI) containing the maximum temperature text.
-3. Periodically captures that ROI from the screen.
-4. Runs Tesseract OCR on the captured image.
-5. Parses values such as `Max 89.9 C`, `90.1°C`, or `最高 90.0 C`.
-6. Logs every reading, OCR text, status, relay action, and ROI to CSV.
-7. Enters `Tripped` when any valid reading is `>= ThresholdC`.
-8. Sends the relay stop command once and stays latched until a manual reset below the threshold.
-
-If OCR fails or no valid temperature is found, the app records `NO READING` and does not trip the relay from that sample.
+- `src/ReactorSoftInterlock.Domain`: threshold, sample, relay action, and latched trip logic.
+- `src/ReactorSoftInterlock.Application`: monitoring loop, OCR text parsing, and ports.
+- `src/ReactorSoftInterlock.Infrastructure`: screenshot capture, Tesseract adapter, serial relay, CSV log, settings.
+- `tests/ReactorSoftInterlock.Tests`: tests for parsing, trip logic, CSV, HEX commands, and monitoring behavior.
+- `docs/g2000-soft-interlock.md`: additional hardware notes.
+- `Doc`: G2000 and project PDFs.
+- `HikmicroAnalyzer`: sample HIKMICRO images.
 
 ## Requirements
 
-Development machine:
+Development PC:
 
 - Windows 10 or later.
 - Visual Studio 2022 with `.NET desktop development`, or .NET 8 SDK.
-- Internet access for first-time NuGet package restore.
+- Internet access for the first NuGet restore.
 
-Runtime / lab machine:
+Laboratory PC:
 
 - Windows 10 or later.
-- HikmicroAnalyzer running with the maximum temperature overlay visible.
+- HikmicroAnalyzer with the maximum temperature overlay visible.
 - Tesseract OCR for Windows.
-- USB serial relay and its Windows driver, if using real relay output.
-- G2000 interlock wiring prepared according to the lab setup.
-
-Install Tesseract:
-
-1. Install a Windows Tesseract build.
-2. Either add `tesseract.exe` to `PATH`, or put the full path into the app's `Tesseract` field.
-3. English OCR data is enough for the default configuration because the parser mainly needs digits and `C`.
+- USB serial relay and its Windows driver.
+- G2000 external interlock / Not-Aus connection confirmed by the lab setup.
+- Multimeter for checking relay contact behavior before connecting to the G2000.
 
 ## Build From Source
 
@@ -73,33 +82,27 @@ Run tests:
 dotnet test .\src\ReactorSoftInterlock.sln
 ```
 
-Build Debug:
-
-```powershell
-dotnet build .\src\ReactorSoftInterlock.sln
-```
-
 Build Release:
 
 ```powershell
 dotnet build .\src\ReactorSoftInterlock.sln -c Release
 ```
 
-The WPF executable is produced under:
+The executable is built under:
 
 ```text
 src\ReactorSoftInterlock.Wpf\bin\Release\net8.0-windows\
 ```
 
-## Run From Source
+## Run
 
-From the repository root:
+Run from source:
 
 ```powershell
 dotnet run --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj
 ```
 
-For Release mode:
+Run Release:
 
 ```powershell
 dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj
@@ -107,36 +110,81 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 
 You can also open `src/ReactorSoftInterlock.sln` in Visual Studio 2022, set `ReactorSoftInterlock.Wpf` as the startup project, and press `F5`.
 
-## First Run Workflow
+## First Software Setup
 
 1. Start HikmicroAnalyzer.
-2. Make the maximum temperature overlay visible.
+2. Make sure the maximum temperature text is visible.
 3. Keep HikmicroAnalyzer visible, preferably maximized.
-4. Start `ReactorSoftInterlock.Wpf`.
-5. Set `Window` to a stable substring of the HikmicroAnalyzer window title, for example `Hikmicro`.
-6. Set `Tesseract` to `tesseract.exe` or the full executable path.
-7. Keep `Dry run relay` enabled for the first OCR test.
+4. Start this application.
+5. Set `Window` to part of the HikmicroAnalyzer title, for example `Hikmicro`.
+6. Set `Tesseract` to `tesseract.exe` or the full path to `tesseract.exe`.
+7. Keep `Dry run relay` checked.
 8. Click `Save Settings`.
 9. Click `Select ROI`.
-10. Drag only around the maximum temperature text and release.
+10. Drag only around the maximum temperature text.
 11. Click `Start`.
-12. Watch `Temperature`, `Raw OCR text`, and the history table.
+12. Check `Temperature`, `Raw OCR text`, and the history table.
 
-The ROI is screen/window-position dependent. If HikmicroAnalyzer is moved, resized, minimized, hidden behind another window, or the Windows display scale changes, select the ROI again.
+The ROI depends on the screen position and size of the HikmicroAnalyzer window. Select the ROI again if the window is moved, resized, minimized, covered, or if Windows display scaling changes.
 
-## Relay Configuration
+## Connecting To The Plasma Generator
 
-The first version intentionally uses configurable HEX commands instead of a hard-coded relay model.
+The relay must be treated as a passive contact. The PC, USB port, serial module, or this software must not feed voltage into the G2000 interlock terminals.
 
-Fields:
+Connection principle:
 
-- `Dry run relay`: when checked, the app simulates relay actions and does not write to the serial port.
-- `COM Port`: Windows serial port, for example `COM3`.
-- `Baud`: relay baud rate, for example `9600`.
-- `Stop HEX`: bytes sent when the temperature trips the interlock.
-- `Reset HEX`: bytes sent when the operator resets the relay from the UI.
+- The USB side of the relay connects to the Windows PC.
+- The relay contact side connects only as a dry contact.
+- The relay contact must be inserted into the lab-confirmed G2000 external interlock / Not-Aus loop.
+- In the normal state, the contact state must allow the G2000 high voltage path.
+- In the trip state, the contact state must prevent or disable the G2000 high voltage path.
 
-Example HEX formats accepted by the parser:
+Do not guess the G2000 terminal numbers from this README. Use the G2000 manual and the actual lab wiring. This README describes the software and relay logic, not a certified wiring diagram.
+
+Recommended commissioning sequence:
+
+1. Keep `Dry run relay` checked and verify OCR only.
+2. Connect the USB relay to the PC, but do not connect it to the G2000 yet.
+3. Find the COM port in Windows Device Manager.
+4. Fill in `COM Port`, `Baud`, `Stop HEX`, and `Reset HEX`.
+5. Keep the relay contact unconnected from the G2000.
+6. Uncheck `Dry run relay`.
+7. Click `Test Relay Stop`.
+8. Use a multimeter to check the relay contact state between `COM-NO` and `COM-NC`.
+9. Decide whether the G2000 interlock must open on alarm or close on alarm.
+10. Connect the relay contact into the confirmed G2000 interlock / Not-Aus loop.
+11. Test G2000 response in a low-risk state before running plasma.
+12. Only then use the relay for real over-temperature trips.
+
+Contact choice:
+
+- If the G2000 interlock must be closed to permit operation, the usual choice is `COM` + `NC`, so a relay trip opens the circuit.
+- If the lab wiring or relay logic is opposite, use `COM` + `NO` or swap the relay state assigned to `Stop HEX` and `Reset HEX`.
+- Always verify with a multimeter. Do not rely only on relay LEDs.
+
+## COM Port Setup
+
+How to find the COM port:
+
+1. Open Windows Device Manager.
+2. Expand `Ports (COM & LPT)`.
+3. Unplug the USB relay.
+4. Plug the USB relay back in.
+5. Watch which `COMx` appears, for example `COM3` or `COM4`.
+6. Enter that value exactly into `COM Port`.
+
+Baud rate:
+
+- Check the relay board manual first.
+- Common values are `9600` and `115200`.
+- The app `Baud` value must match the relay board.
+- If `Test Relay Stop` does nothing, try the documented baud rate before changing HEX commands.
+
+HEX commands:
+
+- `Stop HEX` is sent when over-temperature trip occurs.
+- `Reset HEX` is sent when the operator clicks `Reset`.
+- Accepted formats:
 
 ```text
 A0 01 00 A1
@@ -144,39 +192,50 @@ A0-01-00-A1
 A0:01:00:A1
 ```
 
-Recommended commissioning order:
+If the relay protocol is unknown, keep `Dry run relay` checked and do not connect the relay to the G2000.
 
-1. Keep `Dry run relay` enabled.
-2. Verify OCR is stable.
-3. Connect the USB relay and confirm the COM port in Windows Device Manager.
-4. Enter the relay's stop/reset HEX commands.
-5. Click `Test Relay Stop`.
-6. Verify the relay contact changes with a multimeter.
-7. Wire the relay contact as a passive contact in the G2000 external interlock / emergency-stop loop.
-8. Disable `Dry run relay` only after the contact behavior has been verified.
+Dry Run behavior:
 
-## Normal Lab Operation
+- Checked: the app simulates relay actions and does not open the COM port.
+- Unchecked: the app opens the COM port and sends the configured HEX bytes.
 
-Before enabling plasma:
+## Normal Lab Operation Checklist
 
-1. Confirm HikmicroAnalyzer is visible and not covered by other windows.
-2. Confirm the app shows a valid live temperature.
-3. Confirm the threshold is `90.0 C` unless intentionally changed.
-4. Confirm `Test Relay Stop` disables or opens the intended G2000 interlock path.
-5. Click `Start`.
+Before experiment:
 
-During operation:
+- HikmicroAnalyzer is open.
+- Maximum temperature text is visible.
+- HikmicroAnalyzer is not minimized.
+- No other window covers the temperature text.
+- ROI has been selected after the current window position was chosen.
+- `Temperature` displays a reasonable value.
+- CSV logging is working.
+- `Dry run relay` state matches the current test stage.
+- `Test Relay Stop` has been verified with a multimeter.
+- The G2000 interlock response has been verified in a low-risk state.
 
-- `Monitoring`: valid readings below threshold.
-- `NoReading`: OCR did not produce a valid temperature; sample is logged, relay is not tripped from that sample.
-- `Tripped`: threshold reached or exceeded; stop command has been sent once and the state is latched.
+During experiment:
 
-After a trip:
+- Do not move or resize HikmicroAnalyzer.
+- Do not minimize HikmicroAnalyzer.
+- Do not cover the temperature text.
+- Watch `Raw OCR text` if the displayed temperature looks wrong.
+- If `NO READING` appears repeatedly, pause and fix ROI/OCR before relying on the software.
 
-1. Stop or cool the process as required by the lab procedure.
-2. Wait until the app reads a valid temperature below the threshold.
-3. Click `Reset`.
-4. Start monitoring again if needed.
+After trip:
+
+- Confirm plasma has stopped or entered the intended safe state.
+- Keep the CSV log for the experiment record.
+- Wait until the app reads a valid temperature below the threshold.
+- Click `Reset`.
+- Re-check OCR and relay state before continuing.
+
+## Status Meaning
+
+- `Monitoring`: valid temperature below threshold.
+- `NoReading`: OCR did not produce a valid temperature. The sample is logged, and relay is not tripped from that sample.
+- `Tripped`: threshold reached or exceeded. The stop command was sent once and the trip is latched.
+- `RelayTestFailed`: relay test failed or produced an exception.
 
 ## CSV Logging
 
@@ -192,7 +251,77 @@ CSV columns:
 timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot_roi
 ```
 
-Use `Export CSV` in the UI to copy the current history file to a selected location.
+Use `Export CSV` to copy the current CSV to a selected location.
+
+## Troubleshooting
+
+### HikmicroAnalyzer window not found
+
+- Check that HikmicroAnalyzer is open.
+- Check that `Window` contains part of the actual window title.
+- Do not minimize HikmicroAnalyzer.
+- Try a shorter title filter such as `Hikmicro`.
+
+### OCR shows `NO READING`
+
+- Click `Select ROI` again.
+- Select only the maximum temperature text, not the whole image.
+- Maximize HikmicroAnalyzer.
+- Remove any window covering the temperature text.
+- Check the `Tesseract` path.
+- Reselect ROI after changing Windows display scaling.
+
+### Temperature is wrong
+
+- Make the ROI tighter.
+- Make sure the temperature overlay is sharp and high contrast.
+- Avoid selecting labels, timestamps, or other numbers near the maximum temperature.
+- Write down the `Raw OCR text`; it can be used later to improve the parser.
+
+### `Test Relay Stop` does nothing
+
+- Check whether `Dry run relay` is still checked.
+- Confirm the COM port in Device Manager.
+- Confirm the USB relay driver is installed.
+- Close serial terminal tools that may occupy the port.
+- Confirm `Baud` matches the relay board.
+- Confirm `Stop HEX` is not empty and matches the relay protocol.
+
+### COM port access denied
+
+- Close Arduino Serial Monitor, PuTTY, serial assistants, or vendor relay tools.
+- Unplug and reconnect the USB relay.
+- Check whether the COM number changed.
+- Restart this application if needed.
+
+### COM port not found
+
+- Check USB cable and USB port.
+- Check Device Manager for unknown devices.
+- Install the relay driver.
+- Update the `COM Port` field after reconnecting the device.
+
+### Relay moves but G2000 does not stop
+
+- Verify the real contact with a multimeter.
+- Check whether the wiring uses `COM-NO` or `COM-NC`.
+- Confirm the relay contact is actually in the G2000 external interlock / Not-Aus loop.
+- Confirm the stop command sets the relay to the intended state.
+- Do not continue plasma tests until the interlock behavior is verified without plasma.
+
+### G2000 never allows start
+
+- The contact may be wired opposite to the required logic.
+- The relay initial state may be wrong.
+- Try the other contact pair, `COM-NO` or `COM-NC`, after confirming with the manual.
+- Check whether `Stop HEX` and `Reset HEX` are swapped for the relay board.
+- Use a multimeter to confirm that reset returns the interlock loop to the allowed state.
+
+### Over-temperature trip cannot reset
+
+- This is expected if the current reading is still above threshold.
+- Reset requires a valid temperature below threshold.
+- If OCR is stuck at `NO READING`, fix OCR/ROI first so the app can confirm the temperature is below threshold.
 
 ## Configuration File
 
@@ -202,7 +331,7 @@ Important fields:
 
 - `ThresholdC`: default `90.0`.
 - `PollIntervalMs`: default `1000`.
-- `WindowTitleContains`: window title filter used to find HikmicroAnalyzer.
+- `WindowTitleContains`: finds HikmicroAnalyzer by title.
 - `Roi`: saved after `Select ROI`.
 - `Ocr.TesseractExePath`: `tesseract.exe` or full path.
 - `Ocr.Language`: default `eng`.
@@ -213,20 +342,7 @@ Important fields:
 - `Relay.ResetCommandHex`: reset command bytes.
 - `DataDirectory`: default `data`.
 
-## Test Coverage
-
-Current tests cover:
-
-- OCR temperature text parsing.
-- `89.9 C` below-threshold behavior.
-- `90.0 C` and `90.1 C` trip behavior.
-- Latched trip sends stop only once.
-- Reset is allowed only below threshold with a valid reading.
-- HEX relay command parsing.
-- CSV header and sample output.
-- Monitoring service integration with fake OCR reader and fake relay.
-
-Run:
+## Developer Test Command
 
 ```powershell
 dotnet test .\src\ReactorSoftInterlock.sln
@@ -237,13 +353,3 @@ Expected current result:
 ```text
 Passed: 16, Failed: 0, Skipped: 0
 ```
-
-## Notes
-
-- HikmicroAnalyzer does not need to be maximized, but it must stay visible and stable. Maximized is recommended for lab use.
-- Do not minimize HikmicroAnalyzer while monitoring.
-- Do not cover the selected temperature text with another window.
-- If OCR is unreliable, reselect a tighter ROI around the temperature text.
-- If the HikmicroAnalyzer theme or overlay changes, reselect ROI and verify the raw OCR text before enabling the real relay.
-
-More hardware-specific notes are in `docs/g2000-soft-interlock.md`.
