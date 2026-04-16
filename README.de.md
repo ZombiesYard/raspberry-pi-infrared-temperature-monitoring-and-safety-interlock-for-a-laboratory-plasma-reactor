@@ -221,16 +221,31 @@ Baudrate:
 HEX-Befehle:
 
 - `Stop HEX` wird beim Übertemperatur-Trip gesendet.
-- `Reset HEX` wird beim manuellen Reset gesendet.
+- `Reset HEX` wird beim manuellen Reset oder erfolgreichem Auto-Reset gesendet.
+- Diese Befehle gehören zum externen USB-Relaisboard, nicht zum G2000 selbst.
+- Die App lässt beide Befehle standardmäßig leer, weil die richtigen Bytes vom tatsächlichen externen Relaismodell abhängen.
+- Nur als Beispiel: Übliche LCUS-1 / LCUS-2 / LC Technology USB-Seriell-Relaisboards mit CH340 USB-Seriell-Chip verwenden oft 9600 Baud, `A0 01 01 A2` für Kanal 1 ON und `A0 01 00 A1` für Kanal 1 OFF.
 - Akzeptierte Formate:
 
 ```text
-A0 01 00 A1
-A0-01-00-A1
-A0:01:00:A1
+A0 01 01 A2
+A0-01-01-A2
+A0:01:01:A2
 ```
 
-Wenn das Relaisprotokoll unbekannt ist, `Dry run relay` aktiviert lassen und nicht mit dem G2000 verbinden.
+Wenn noch kein externes Relaisboard ausgewählt wurde, `Dry run relay` aktiviert lassen und den App-Ausgang nicht mit dem G2000 verbinden.
+
+Optionale LCUS/CH340-Kanal-1-Verdrahtung, nur wenn genau dieses externe Relaisboard verwendet wird:
+
+- Wenn der G2000-Interlock geöffnet werden muss, um Hochspannung zu stoppen, und `COM` + `NC` verwendet wird, zieht `Stop HEX = A0 01 01 A2` das Relais an und öffnet den NC-Kontakt.
+- `Reset HEX = A0 01 00 A1` lässt das Relais abfallen und schließt `COM` + `NC` wieder.
+- Wenn das Labor `COM` + `NO` verwendet, unbedingt mit dem Multimeter prüfen; Stop/Reset müssen eventuell getauscht werden.
+
+G2000-Computersteuerung:
+
+- Das G2000-Handbuch nennt industrielle Schnittstellen wie CAN und RS485. Diese sind G2000-native Schnittstellen und getrennt vom externen USB-Relaispfad.
+- Dieser Prototyp implementiert noch keine G2000-CAN/RS485-Telegramme. Für direkte PC-Steuerung des G2000 müssen zuerst die Protokollseiten aus dem Handbuch ausgewertet werden: Steckerbelegung, Bustyp, Baudrate, Node-Adresse, Nachrichten-/Registermap, Enable-Befehl, Stop-Befehl, Statuswort und mögliche Watchdog- oder zyklische Telegrammpflichten.
+- Bis dieses Protokoll implementiert und getestet ist, bleibt der empfohlene Stop-Pfad die externe Interlock-/Not-Aus-Schleife, weil sie mit dem Multimeter überprüfbar ist und nicht vom G2000-Softwaremodus abhängt.
 
 Dry Run:
 
@@ -375,8 +390,8 @@ Wichtige Felder:
 - `Relay.DryRun`: Standard `true`.
 - `Relay.PortName`: Standard `COM3`.
 - `Relay.BaudRate`: Standard `9600`.
-- `Relay.StopCommandHex`: Stop-Befehlsbytes.
-- `Relay.ResetCommandHex`: Reset-Befehlsbytes.
+- `Relay.StopCommandHex`: standardmäßig leer; aus dem Handbuch des externen Relais eintragen.
+- `Relay.ResetCommandHex`: standardmäßig leer; aus dem Handbuch des externen Relais eintragen.
 - `DataDirectory`: Standard `data`.
 - `Language`: `en`, `zh-CN` oder `de`.
 - `AutoResetEnabled`: Standard `true`.

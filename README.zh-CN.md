@@ -221,16 +221,31 @@ ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最�
 HEX 命令：
 
 - `Stop HEX` 是超温 trip 时发送的命令。
-- `Reset HEX` 是人工 reset 时发送的命令。
+- `Reset HEX` 是人工 reset 或自动复位成功时发送的命令。
+- 这些命令属于外部 USB 继电器板，不属于 G2000 本体。
+- 软件默认保持两条命令为空，因为正确字节取决于实际外部继电器型号。
+- 仅作为例子：常见 LCUS-1 / LCUS-2 / LC Technology / CH340 USB 串口继电器板通常使用 9600 波特率，`A0 01 01 A2` 表示通道 1 ON / 吸合，`A0 01 00 A1` 表示通道 1 OFF / 释放。
 - 支持以下格式：
 
 ```text
-A0 01 00 A1
-A0-01-00-A1
-A0:01:00:A1
+A0 01 01 A2
+A0-01-01-A2
+A0:01:01:A2
 ```
 
-如果不知道继电器协议，保持 `Dry run relay` 勾选，不要接 G2000。
+如果还没有确定外部继电器板型号，保持 `Dry run relay` 勾选，不要把软件输出接到 G2000。
+
+可选 LCUS/CH340 通道 1 接法，仅当实际使用这种外部继电器板时适用：
+
+- 如果 G2000 interlock 需要“开路来停止高压”，并且使用 `COM` + `NC`，`Stop HEX = A0 01 01 A2` 会让继电器吸合，从而打开 NC 触点。
+- `Reset HEX = A0 01 00 A1` 会释放继电器，让 `COM` + `NC` 重新闭合。
+- 如果实验室决定使用 `COM` + `NO`，必须用万用表确认；stop/reset 逻辑可能需要互换。
+
+G2000 电脑控制：
+
+- G2000 手册提到 CAN、RS485 等工业控制接口。这些是 G2000 原生接口，和外部 USB 继电器方案是两条不同路线。
+- 当前原型还没有实现 G2000 CAN/RS485 报文。要让电脑直接控制 G2000，必须先解析手册里的协议页：接口针脚、总线类型、波特率、节点地址、消息/寄存器表、enable 命令、stop 命令、状态字，以及是否需要 watchdog 或周期报文。
+- 在原生协议实现并测试前，推荐停机路径仍然是 external interlock / Not-Aus 回路，因为这个路径可以用万用表验证，不依赖 G2000 软件控制模式。
 
 Dry Run 含义：
 
@@ -375,8 +390,8 @@ timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot
 - `Relay.DryRun`：默认 `true`。
 - `Relay.PortName`：默认 `COM3`。
 - `Relay.BaudRate`：默认 `9600`。
-- `Relay.StopCommandHex`：停止命令字节。
-- `Relay.ResetCommandHex`：复位命令字节。
+- `Relay.StopCommandHex`：默认空；按外部继电器说明书填写。
+- `Relay.ResetCommandHex`：默认空；按外部继电器说明书填写。
 - `DataDirectory`：默认 `data`。
 - `Language`：`en`、`zh-CN` 或 `de`。
 - `AutoResetEnabled`：默认 `true`。

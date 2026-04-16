@@ -221,16 +221,31 @@ Baud rate:
 HEX commands:
 
 - `Stop HEX` is sent when over-temperature trip occurs.
-- `Reset HEX` is sent when the operator clicks `Reset`.
+- `Reset HEX` is sent when the operator clicks `Reset` or when auto reset succeeds.
+- These commands belong to the external USB relay board, not to the G2000 itself.
+- The app leaves both commands empty by default because the correct bytes depend on the actual external relay model.
+- Example only: common LCUS-1 / LCUS-2 / LC Technology USB serial relay boards with a CH340 USB-to-serial chip often use 9600 baud, `A0 01 01 A2` for channel 1 ON, and `A0 01 00 A1` for channel 1 OFF.
 - Accepted formats:
 
 ```text
-A0 01 00 A1
-A0-01-00-A1
-A0:01:00:A1
+A0 01 01 A2
+A0-01-01-A2
+A0:01:01:A2
 ```
 
-If the relay protocol is unknown, keep `Dry run relay` checked and do not connect the relay to the G2000.
+If no external relay board has been selected yet, keep `Dry run relay` checked and do not connect the app output to the G2000.
+
+Optional LCUS/CH340 channel 1 wiring, only if that exact external relay board is used:
+
+- If the G2000 interlock must be opened to stop high voltage and you wire through `COM` + `NC`, `Stop HEX = A0 01 01 A2` energizes the relay and opens the NC contact.
+- `Reset HEX = A0 01 00 A1` releases the relay and closes `COM` + `NC` again.
+- If the lab chooses `COM` + `NO` instead, verify with a multimeter; the stop/reset logic may need to be swapped.
+
+G2000 computer control:
+
+- The G2000 manual mentions industrial control interfaces such as CAN and RS485. Those are G2000-native interfaces and are separate from the external USB relay path.
+- This prototype does not yet implement G2000 CAN/RS485 frames. To control the G2000 directly from the PC, the exact protocol pages from the G2000 manual must be decoded first: connector pinout, bus type, baud rate, node address, message/register map, enable command, stop command, status word, and any watchdog or cyclic telegram requirement.
+- Until that protocol is implemented and tested, the recommended stop path remains the external interlock / Not-Aus circuit, because it can be verified with a multimeter and does not depend on G2000 software mode.
 
 Dry Run behavior:
 
@@ -377,8 +392,8 @@ Important fields:
 - `Relay.DryRun`: default `true`.
 - `Relay.PortName`: default `COM3`.
 - `Relay.BaudRate`: default `9600`.
-- `Relay.StopCommandHex`: stop command bytes.
-- `Relay.ResetCommandHex`: reset command bytes.
+- `Relay.StopCommandHex`: empty by default; fill from the external relay manual.
+- `Relay.ResetCommandHex`: empty by default; fill from the external relay manual.
 - `DataDirectory`: default `data`.
 - `Language`: `en`, `zh-CN`, or `de`.
 - `AutoResetEnabled`: default `true`.
