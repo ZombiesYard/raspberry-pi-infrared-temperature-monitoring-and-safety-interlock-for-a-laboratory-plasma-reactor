@@ -34,10 +34,14 @@ Der aktuelle Branch `relay-interlock-test` ist bereits auf das im Labor getestet
   - `G2000 I1 -> COM1`
   - `G2000 I2 -> NO1`
 
-Deshalb sind in diesem Branch standardmäßig gesetzt:
+Deshalb verwendet dieser Branch jetzt standardmaessig eine Engineering-Relaisbank mit vier Kanaelen:
 
-- `Stop-Befehl = AT+CH1=0`
-- `Reset-Befehl = AT+CH1=1`
+- CH1 -> Interlock A negativ -> `I1-I2`
+- CH2 -> Interlock A positiv -> `I5-I6`
+- CH3 -> Interlock B negativ -> `I3-I4`
+- CH4 -> Interlock B positiv -> `I7-I8`
+- Trip-Aktion: alle aktivierten Kanaele oeffnen
+- Restore-Aktion: alle aktivierten Kanaele schliessen
 
 ## Funktionsweise
 
@@ -47,10 +51,10 @@ Deshalb sind in diesem Branch standardmäßig gesetzt:
 4. Tesseract OCR wandelt den Screenshot in Text um.
 5. Der Parser erkennt Werte wie `Max 89.9 C`, `90.1°C` oder `最高 90.0 C`.
 6. Jede Messung wird in CSV geschrieben.
-7. Bei einem gültigen Messwert `>= ThresholdC` wechselt die Software in `Tripped`.
-8. In `Tripped` wird der Stop-Befehl einmal gesendet und der Zustand bleibt verriegelt.
-9. Manueller Reset ist erst möglich, wenn ein gültiger Temperaturwert unterhalb des Schwellwerts gelesen wurde.
-10. Wenn `Auto reset` aktiviert ist, sendet die Software den Relais-Reset automatisch, nachdem die Temperatur für die eingestellte stabile Zeit unter `Recovery C` geblieben ist.
+7. Bei einem gueltigen Messwert `>= ThresholdC` wechselt die Software in `Tripped`.
+8. In `Tripped` oeffnet die Software einmal alle aktivierten Interlock-Kanaele und der Zustand bleibt verriegelt.
+9. Manueller Reset ist erst moeglich, wenn ein gueltiger Temperaturwert unterhalb des Schwellwerts gelesen wurde.
+10. Wenn `Auto reset` aktiviert ist, schliesst die Software die Relaisbank automatisch wieder, nachdem die Temperatur fuer die eingestellte stabile Zeit unter `Recovery C` geblieben ist.
 
 Wenn OCR fehlschlägt, wird `NO READING` protokolliert. Ein einzelner `NO READING`-Wert löst das Relais nicht aus.
 
@@ -142,7 +146,14 @@ Das self-contained Paket für den Labor-PC erzeugen:
 dotnet publish .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj -c Release -r win-x64 --self-contained true -o .\artifacts\ReactorSoftInterlock-win-x64
 ```
 
-Der veröffentlichte Ordner kann gezippt und auf den Labor-PC kopiert werden. Er enthält `ReactorSoftInterlock.Wpf.exe` und die von der App benötigten .NET Runtime-Dateien.
+Der veroeffentlichte Ordner kann gezippt und auf den Labor-PC kopiert werden. Er enthaelt `ReactorSoftInterlock.Wpf.exe` und die von der App benoetigten .NET Runtime-Dateien.
+
+Fuer diesen Branch sind dies die bevorzugten Namen:
+
+```text
+artifacts\ReactorSoftInterlock-win-x64-dsd-offline\
+artifacts\ReactorSoftInterlock-win-x64-dsd-offline.zip
+```
 
 ## Starten
 
@@ -162,7 +173,7 @@ Alternativ `src/ReactorSoftInterlock.sln` in Visual Studio 2022 öffnen, `Reacto
 
 Labor-Release-Paket starten:
 
-1. `ReactorSoftInterlock-win-x64-latest.zip` entpacken.
+1. `ReactorSoftInterlock-win-x64-dsd-offline.zip` entpacken.
 2. `ReactorSoftInterlock.Wpf.exe` starten.
 3. Falls Windows SmartScreen erscheint, zuerst bestätigen, dass die Datei aus diesem Projekt stammt.
 4. `appsettings.json` neben der EXE belassen; die App aktualisiert diese Datei beim Speichern der Einstellungen.
@@ -181,7 +192,8 @@ Labor-Release-Paket starten:
 9. `Select ROI` klicken.
 10. Nur den maximalen Temperaturtext markieren.
 11. `Start` klicken.
-12. `Temperature`, `Raw OCR text` und die Historientabelle prüfen.
+12. `Temperature`, `Raw OCR text`, Diagramm und Historientabelle pruefen.
+13. Die Seite `Engineering` nur fuer Relais- und Interlock-Validierung verwenden.
 
 Die ROI hängt von Fensterposition, Fenstergröße und Windows-Skalierung ab. Nach Verschieben, Skalieren, Minimieren, Überdecken oder Änderung der Anzeige-Skalierung muss die ROI neu gewählt werden.
 
@@ -214,13 +226,15 @@ Empfohlene Inbetriebnahme:
 11. G2000-Reaktion ohne Plasma oder in einem risikoarmen Zustand prüfen.
 12. Erst danach für echte Übertemperatur-Trips verwenden.
 
-Verifizierte Kontaktwahl für diesen Branch:
+Empfohlene Engineering-Zuordnung fuer diesen Branch:
 
-- Der validierte Pfad verwendet `COM1` + `NO1`.
-- Verdrahtung: `G2000 I1 -> COM1`, `G2000 I2 -> NO1`.
-- `AT+CH1=1` schließt `COM1-NO1` und stellt den Interlock wieder her.
-- `AT+CH1=0` öffnet `COM1-NO1` und löst den Interlock aus.
-- Immer mit dem Multimeter prüfen. Nicht nur auf Relais-LEDs vertrauen.
+- CH1 -> Interlock A negativ -> `I1-I2`
+- CH2 -> Interlock A positiv -> `I5-I6`
+- CH3 -> Interlock B negativ -> `I3-I4`
+- CH4 -> Interlock B positiv -> `I7-I8`
+- Pro Kanal bevorzugt `COMx` + `NOx`, damit der Zweig bei Kanal EIN geschlossen und bei Kanal AUS geoeffnet ist.
+- Der Monitoring-Modus in diesem Branch ist dafuer ausgelegt, bei Trip alle aktivierten Kanaele zu oeffnen und beim Restore wieder zu schliessen.
+- Immer mit dem Multimeter pruefen. Nicht nur auf Relais-LEDs vertrauen.
 
 ## COM-Port einrichten
 
@@ -240,24 +254,52 @@ Baudrate:
 - Der Wert `Baud` in der App muss zum Relaisboard passen.
 - Wenn `Test Relay Stop` nichts bewirkt, zuerst die Baudrate prüfen, danach die Relaisbefehle.
 
-Relaisbefehle:
+Relaisverhalten in diesem Branch:
 
-- `Stop-Befehl` wird beim Übertemperatur-Trip gesendet.
-- `Reset-Befehl` wird beim manuellen Reset, beim Klick auf `Relais wieder schließen` oder nach erfolgreichem Auto-Reset gesendet.
-- Diese Befehle gehören zum externen USB-Relaisboard, nicht zum G2000 selbst.
+- Im Hauptfenster muessen normale Laboranwender keine AT-Befehle direkt bearbeiten.
+- Die Seite `Engineering` bietet gruppierte Aktionen:
+  - `Alle Interlocks oeffnen`
+  - `Alle Interlocks schliessen`
+  - einzelne `Oeffnen` / `Schliessen` Buttons fuer CH1-CH4
+- `Erweiterte Einstellungen` behalten den vollen Engineering-Zugriff:
+  - Baudrate
+  - Oeffnen- / Schliessen-Befehle fuer CH1-CH4
+  - Kanal-Aktivierung
+  - DSD-Standardwerte wiederherstellen
+- Diese Befehle gehoeren zum externen USB-Relaisboard, nicht zum G2000 selbst.
 - Im aktuellen `relay-interlock-test`-Branch wurde das Relais `DSD TECH SH-UR04A` getestet.
 - Standard-Serieneinstellungen:
-  - `COM Port = COM3` während der Validierung
+  - `COM Port = COM3` waehrend der Validierung
   - `Baud = 9600`
   - `Data bits = 8`
   - `Parity = None`
   - `Stop bits = 1`
-- Standardbefehle für dieses Relais:
+- Standardbefehle pro Kanal:
 
 ```text
-Stop-Befehl  = AT+CH1=0
-Reset-Befehl = AT+CH1=1
+CH1 oeffnen    = AT+CH1=0
+CH1 schliessen = AT+CH1=1
+CH2 oeffnen    = AT+CH2=0
+CH2 schliessen = AT+CH2=1
+CH3 oeffnen    = AT+CH3=0
+CH3 schliessen = AT+CH3=1
+CH4 oeffnen    = AT+CH4=0
+CH4 schliessen = AT+CH4=1
 ```
+
+Aktuelle UI-Struktur in diesem Branch:
+
+- Seite `Monitor`:
+  - Alltagseinstellungen
+  - OCR-Ueberwachung
+  - Diagramm und Verlauf
+  - gruppierte Relaisaktionen
+- Seite `Engineering`:
+  - explizite Interlock-Test-Checkliste
+  - Einzelkanael-Buttons fuer CH1-CH4
+  - gruppierte Oeffnen- / Schliessen-Aktionen
+- `Tools -> Erweiterte Einstellungen`:
+  - vollstaendige Relaisbefehl-Bearbeitung nur fuer Engineering
 
 - Die Konfigurationsschlüssel in `appsettings.json` heißen aus Kompatibilitätsgründen weiterhin `StopCommandHex` und `ResetCommandHex`, speichern in diesem Branch aber ASCII-AT-Befehle statt HEX-Bytes.
 

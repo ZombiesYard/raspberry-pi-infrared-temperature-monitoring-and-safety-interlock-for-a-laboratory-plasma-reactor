@@ -17,17 +17,21 @@ public sealed class SettingsStore
         if (!File.Exists(_path))
         {
             var defaults = new AppSettings();
+            defaults.Relay.Normalize();
             await SaveAsync(defaults, cancellationToken).ConfigureAwait(false);
             return defaults;
         }
 
         await using var stream = File.OpenRead(_path);
-        return await JsonSerializer.DeserializeAsync<AppSettings>(stream, JsonOptions, cancellationToken).ConfigureAwait(false)
+        var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, JsonOptions, cancellationToken).ConfigureAwait(false)
             ?? new AppSettings();
+        settings.Relay.Normalize();
+        return settings;
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken)
     {
+        settings.Relay.Normalize();
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrWhiteSpace(directory))
         {

@@ -34,10 +34,14 @@
   - `G2000 I1 -> COM1`
   - `G2000 I2 -> NO1`
 
-因此本分支默认就是：
+因此本分支现在默认就是四路工程继电器组：
 
-- `停止命令 = AT+CH1=0`
-- `复位命令 = AT+CH1=1`
+- CH1 -> Interlock A 负支路 -> `I1-I2`
+- CH2 -> Interlock A 正支路 -> `I5-I6`
+- CH3 -> Interlock B 负支路 -> `I3-I4`
+- CH4 -> Interlock B 正支路 -> `I7-I8`
+- Trip 动作：断开所有启用通道
+- Restore 动作：闭合所有启用通道
 
 ## 软件如何工作
 
@@ -48,9 +52,9 @@
 5. 解析 `Max 89.9 C`、`90.1°C`、`最高 90.0 C` 这类温度。
 6. 每条样本写入 CSV。
 7. 任何有效读数 `>= ThresholdC` 时进入 `Tripped`。
-8. `Tripped` 时只发送一次继电器停止命令，并保持锁存。
+8. `Tripped` 时软件会一次性断开所有启用的 interlock 通道，并保持锁存。
 9. 只有读到低于阈值的有效温度后，才允许人工 `Reset`。
-10. 如果启用 `Auto reset`，温度连续低于 `Recovery C` 并保持到设定稳定时间后，软件会自动发送继电器复位命令。
+10. 如果启用 `Auto reset`，温度连续低于 `Recovery C` 并保持到设定稳定时间后，软件会自动重新闭合继电器组。
 
 如果 OCR 失败，软件记录 `NO READING`。单独的 `NO READING` 不会触发继电器。
 
@@ -144,6 +148,13 @@ dotnet publish .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj -c
 
 生成的文件夹可以压缩后复制到实验室电脑。里面包含 `ReactorSoftInterlock.Wpf.exe` 和软件需要的 .NET runtime 文件。
 
+当前分支推荐发布目录和压缩包名：
+
+```text
+artifacts\ReactorSoftInterlock-win-x64-dsd-offline\
+artifacts\ReactorSoftInterlock-win-x64-dsd-offline.zip
+```
+
 ## 启动软件
 
 从源码运行：
@@ -162,7 +173,7 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 
 运行实验室 Release 包：
 
-1. 解压 `ReactorSoftInterlock-win-x64-latest.zip`。
+1. 解压 `ReactorSoftInterlock-win-x64-dsd-offline.zip`。
 2. 双击运行 `ReactorSoftInterlock.Wpf.exe`。
 3. 如果 Windows SmartScreen 弹出提示，先确认文件来自本项目，再继续运行。
 4. 保持 `appsettings.json` 和 exe 在同一目录；点击保存设置时软件会更新这个文件。
@@ -183,7 +194,8 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 9. 点击 `Select ROI`。
 10. 只框选最高温文字，不要框太大。
 11. 点击 `Start`。
-12. 观察 `Temperature`、`Raw OCR text` 和历史表格。
+12. 观察 `Temperature`、`Raw OCR text`、折线图和历史表格。
+13. `Engineering` 页只用于继电器和 interlock 工程测试。
 
 ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最小化、遮挡 HikmicroAnalyzer，或 Windows 显示缩放改变，需要重新 `Select ROI`。
 
@@ -216,12 +228,14 @@ ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最�
 11. 在不启用 plasma 或低风险状态下测试 G2000 对继电器动作的响应。
 12. 确认无误后，才用于真实超温停机。
 
-当前分支已验证的触点方案：
+当前分支推荐的工程映射：
 
-- 已验证路径使用 `COM1` + `NO1`
-- 接线：`G2000 I1 -> COM1`，`G2000 I2 -> NO1`
-- `AT+CH1=1` 会闭合 `COM1-NO1`，恢复 interlock
-- `AT+CH1=0` 会打开 `COM1-NO1`，触发 interlock
+- CH1 -> Interlock A 负支路 -> `I1-I2`
+- CH2 -> Interlock A 正支路 -> `I5-I6`
+- CH3 -> Interlock B 负支路 -> `I3-I4`
+- CH4 -> Interlock B 正支路 -> `I7-I8`
+- 每一路优先使用 `COMx` + `NOx`，这样通道 ON 时闭合，OFF 时断开。
+- 本分支的监控模式就是按“超温时全部断开、恢复时全部接通”设计的。
 - 必须用万用表确认，不要只看继电器 LED。
 
 ## COM 口设置
@@ -242,10 +256,18 @@ ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最�
 - 软件中的 `Baud` 必须和继电器板一致。
 - 如果 `Test Relay Stop` 没反应，先检查波特率，再检查继电器命令。
 
-继电器命令：
+当前分支里的继电器行为：
 
-- `停止命令` 会在超温 trip 时发送。
-- `复位命令` 会在人工点击 `Reset`、点击 `测试继电器恢复`，或者自动复位成功时发送。
+- 主界面不再让普通实验室用户直接编辑底层 AT 命令。
+- `Engineering` 页提供成组操作：
+  - `全部断开 Interlock`
+  - `全部接通 Interlock`
+  - CH1-CH4 独立 `断开` / `接通`
+- `高级设置` 保留全部工程能力：
+  - 波特率
+  - CH1-CH4 的 open / close 命令
+  - 通道启用开关
+  - 恢复 DSD 默认模板
 - 这些命令属于外部 USB 继电器板，不属于 G2000 本体。
 - 当前 `relay-interlock-test` 分支里，已测试的继电器是 `DSD TECH SH-UR04A`。
 - 当前默认串口参数：
@@ -254,12 +276,32 @@ ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最�
   - `Data bits = 8`
   - `Parity = None`
   - `Stop bits = 1`
-- 当前默认命令：
+- 当前默认逐通道命令：
 
 ```text
-停止命令 = AT+CH1=0
-复位命令 = AT+CH1=1
+CH1 断开 = AT+CH1=0
+CH1 接通 = AT+CH1=1
+CH2 断开 = AT+CH2=0
+CH2 接通 = AT+CH2=1
+CH3 断开 = AT+CH3=0
+CH3 接通 = AT+CH3=1
+CH4 断开 = AT+CH4=0
+CH4 接通 = AT+CH4=1
 ```
+
+当前分支的 UI 结构：
+
+- `Monitor` 页：
+  - 日常设置
+  - OCR 监控
+  - 折线图与历史表格
+  - 成组继电器操作
+- `Engineering` 页：
+  - 明确的 interlock 测试 checklist
+  - CH1-CH4 单独按钮
+  - 全部接通 / 全部断开 操作
+- `Tools -> 高级设置`：
+  - 仅供工程调试使用的完整继电器命令编辑
 
 - `appsettings.json` 里的配置键仍然叫 `StopCommandHex` / `ResetCommandHex`，这是为了兼容旧配置；但在当前分支里，里面存的已经不是 HEX 字节，而是 ASCII AT 命令。
 

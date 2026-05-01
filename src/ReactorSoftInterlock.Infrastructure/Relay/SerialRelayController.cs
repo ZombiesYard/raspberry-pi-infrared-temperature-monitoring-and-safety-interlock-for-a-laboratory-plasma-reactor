@@ -6,31 +6,50 @@ using ReactorSoftInterlock.Infrastructure.Settings;
 
 namespace ReactorSoftInterlock.Infrastructure.Relay;
 
-public sealed class SerialRelayController : IRelayController
+public sealed class SerialRelayController : IRelayBankController
 {
     private readonly RelaySettings _settings;
 
     public SerialRelayController(RelaySettings settings)
     {
         _settings = settings;
+        _settings.Normalize();
     }
 
     public Task<RelayAction> StopAsync(CancellationToken cancellationToken)
     {
-        Send(_settings.StopCommandHex);
+        Send(RelayBankCommandFactory.BuildTripAllCommandText(_settings));
         return Task.FromResult(RelayAction.StopSent);
     }
 
     public Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
     {
-        Send(_settings.ResetCommandHex);
+        Send(RelayBankCommandFactory.BuildRestoreAllCommandText(_settings));
         return Task.FromResult(RelayAction.ResetSent);
     }
 
     public Task<RelayAction> TestStopAsync(CancellationToken cancellationToken)
     {
-        Send(_settings.StopCommandHex);
+        Send(RelayBankCommandFactory.BuildTripAllCommandText(_settings));
         return Task.FromResult(RelayAction.TestStopSent);
+    }
+
+    public Task OpenAllInterlocksAsync(CancellationToken cancellationToken)
+    {
+        Send(RelayBankCommandFactory.BuildTripAllCommandText(_settings));
+        return Task.CompletedTask;
+    }
+
+    public Task CloseAllInterlocksAsync(CancellationToken cancellationToken)
+    {
+        Send(RelayBankCommandFactory.BuildRestoreAllCommandText(_settings));
+        return Task.CompletedTask;
+    }
+
+    public Task SetChannelClosedAsync(int channelNumber, bool closed, CancellationToken cancellationToken)
+    {
+        Send(RelayBankCommandFactory.BuildChannelCommandText(_settings, channelNumber, closed));
+        return Task.CompletedTask;
     }
 
     private void Send(string commandText)

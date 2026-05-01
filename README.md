@@ -34,10 +34,14 @@ The current `relay-interlock-test` branch is already aligned with the relay that
   - `G2000 I1 -> COM1`
   - `G2000 I2 -> NO1`
 
-This branch therefore defaults to:
+This branch now defaults to a four-channel engineering relay bank:
 
-- `Stop command = AT+CH1=0`
-- `Reset command = AT+CH1=1`
+- CH1 -> Interlock A negative -> `I1-I2`
+- CH2 -> Interlock A positive -> `I5-I6`
+- CH3 -> Interlock B negative -> `I3-I4`
+- CH4 -> Interlock B positive -> `I7-I8`
+- Trip action: open all enabled channels
+- Restore action: close all enabled channels
 
 ## How The App Works
 
@@ -48,9 +52,9 @@ This branch therefore defaults to:
 5. The parser extracts temperatures such as `Max 89.9 C`, `90.1°C`, or `最高 90.0 C`.
 6. Every sample is written to CSV.
 7. When a valid temperature is `>= ThresholdC`, the app enters `Tripped`.
-8. In `Tripped`, the stop relay command is sent once and the state stays latched.
+8. In `Tripped`, the software opens all enabled interlock channels once and the state stays latched.
 9. Manual reset is only allowed after a valid temperature below the threshold is read.
-10. If `Auto reset` is enabled, the relay reset command is sent automatically after the temperature stays below `Recovery C` for the configured stable time.
+10. If `Auto reset` is enabled, the relay bank is closed automatically after the temperature stays below `Recovery C` for the configured stable time.
 
 If OCR fails, the app records `NO READING`. A `NO READING` sample does not trigger the relay by itself.
 
@@ -144,6 +148,13 @@ dotnet publish .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterlock.Wpf.csproj -c
 
 The published folder can be zipped and moved to the lab PC. It contains `ReactorSoftInterlock.Wpf.exe` and the .NET runtime files needed by the app.
 
+For this branch, the preferred deployment folder and zip name are:
+
+```text
+artifacts\ReactorSoftInterlock-win-x64-dsd-offline\
+artifacts\ReactorSoftInterlock-win-x64-dsd-offline.zip
+```
+
 ## Run
 
 Run from source:
@@ -162,7 +173,7 @@ You can also open `src/ReactorSoftInterlock.sln` in Visual Studio 2022, set `Rea
 
 Run the lab Release package:
 
-1. Unzip `ReactorSoftInterlock-win-x64-latest.zip`.
+1. Unzip `ReactorSoftInterlock-win-x64-dsd-offline.zip`.
 2. Run `ReactorSoftInterlock.Wpf.exe`.
 3. If Windows SmartScreen appears, confirm that the file came from this project before continuing.
 4. Keep `appsettings.json` next to the executable; the app updates it when settings are saved.
@@ -183,7 +194,8 @@ Run the lab Release package:
 9. Click `Select ROI`.
 10. Drag only around the maximum temperature text.
 11. Click `Start`.
-12. Check `Temperature`, `Raw OCR text`, and the history table.
+12. Check `Temperature`, `Raw OCR text`, the chart, and the history table.
+13. Use the `Engineering` tab only for relay and interlock validation.
 
 The ROI depends on the screen position and size of the HikmicroAnalyzer window. Select the ROI again if the window is moved, resized, minimized, covered, or if Windows display scaling changes.
 
@@ -216,12 +228,14 @@ Recommended commissioning sequence:
 11. Test G2000 response in a low-risk state before running plasma.
 12. Only then use the relay for real over-temperature trips.
 
-Verified contact choice for the current branch:
+Recommended engineering mapping for the current branch:
 
-- The tested path uses `COM1` + `NO1`.
-- Wire `G2000 I1 -> COM1` and `G2000 I2 -> NO1`.
-- `AT+CH1=1` closes `COM1-NO1` and restores the interlock path.
-- `AT+CH1=0` opens `COM1-NO1` and trips the interlock path.
+- CH1 -> Interlock A negative -> `I1-I2`
+- CH2 -> Interlock A positive -> `I5-I6`
+- CH3 -> Interlock B negative -> `I3-I4`
+- CH4 -> Interlock B positive -> `I7-I8`
+- Use `COMx` + `NOx` so that the branch is closed when the relay channel is ON and opened when the relay channel is OFF.
+- Monitoring mode in this branch is designed to open all enabled channels on trip and close all enabled channels on restore.
 - Always verify with a multimeter. Do not rely only on relay LEDs.
 
 ## COM Port Setup
@@ -242,10 +256,18 @@ Baud rate:
 - The app `Baud` value must match the relay board.
 - If `Test Relay Stop` does nothing, try the documented baud rate before changing relay commands.
 
-Relay commands:
+Relay behavior in this branch:
 
-- `Stop command` is sent when over-temperature trip occurs.
-- `Reset command` is sent when the operator clicks `Reset`, when `Test Relay Restore` is used, or when auto reset succeeds.
+- The main window no longer expects ordinary users to edit low-level AT strings.
+- The `Engineering` tab provides grouped actions:
+  - `Disconnect All Interlocks`
+  - `Connect All Interlocks`
+  - per-channel `Disconnect` / `Connect`
+- `Advanced Settings` keeps full engineering access to:
+  - baud rate
+  - CH1-CH4 open / close commands
+  - per-channel enable flags
+  - restore DSD defaults
 - These commands belong to the external USB relay board, not to the G2000 itself.
 - In the current `relay-interlock-test` branch, the tested relay is `DSD TECH SH-UR04A`.
 - Default serial settings:
@@ -254,12 +276,32 @@ Relay commands:
   - `Data bits = 8`
   - `Parity = None`
   - `Stop bits = 1`
-- Default commands for this relay:
+- Default per-channel commands:
 
 ```text
-Stop command  = AT+CH1=0
-Reset command = AT+CH1=1
+CH1 open  = AT+CH1=0
+CH1 close = AT+CH1=1
+CH2 open  = AT+CH2=0
+CH2 close = AT+CH2=1
+CH3 open  = AT+CH3=0
+CH3 close = AT+CH3=1
+CH4 open  = AT+CH4=0
+CH4 close = AT+CH4=1
 ```
+
+Current UI structure in this branch:
+
+- `Monitor` tab:
+  - daily setup
+  - OCR monitoring
+  - chart and history
+  - grouped relay actions
+- `Engineering` tab:
+  - explicit interlock test checklist
+  - single-channel buttons for CH1-CH4
+  - grouped connect / disconnect actions
+- `Tools -> Advanced Settings`:
+  - full relay command editing for engineering use only
 
 - The configuration keys in `appsettings.json` are still named `StopCommandHex` and `ResetCommandHex` for backward compatibility, but in this branch they now store ASCII AT commands rather than hexadecimal bytes.
 

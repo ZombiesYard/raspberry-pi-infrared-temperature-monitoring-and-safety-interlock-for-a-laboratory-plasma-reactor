@@ -24,6 +24,8 @@ public partial class MainWindow : Window
 {
     private readonly string _settingsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
     private readonly ObservableCollection<TemperatureSample> _history = [];
+    private readonly Dictionary<int, bool?> _channelStates = new();
+    private readonly List<ChannelUi> _channelUis = [];
     private SettingsStore _settingsStore = null!;
     private AppSettings _settings = null!;
     private CsvSampleLog _sampleLog = null!;
@@ -38,6 +40,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         HistoryGrid.ItemsSource = _history;
+        InitializeChannelUi();
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
     }
@@ -52,9 +55,12 @@ public partial class MainWindow : Window
             new LanguageOption("zh-CN", "中文"),
             new LanguageOption("de", "Deutsch")
         };
+
         BindSettingsToUi();
         ApplyLanguage();
         BuildServices();
+        SetAllChannelStates(null);
+        SetCurrentMode(T("mode.monitoring"));
         await LoadRecentHistoryAsync();
         DrawTemperatureChart();
     }
@@ -63,6 +69,14 @@ public partial class MainWindow : Window
     {
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
+    }
+
+    private void InitializeChannelUi()
+    {
+        _channelUis.Add(new ChannelUi(1, Channel1NameText, Channel1MappingText, Channel1StateText, Channel1OpenButton, Channel1CloseButton));
+        _channelUis.Add(new ChannelUi(2, Channel2NameText, Channel2MappingText, Channel2StateText, Channel2OpenButton, Channel2CloseButton));
+        _channelUis.Add(new ChannelUi(3, Channel3NameText, Channel3MappingText, Channel3StateText, Channel3OpenButton, Channel3CloseButton));
+        _channelUis.Add(new ChannelUi(4, Channel4NameText, Channel4MappingText, Channel4StateText, Channel4OpenButton, Channel4CloseButton));
     }
 
     private async void SelectRoiButton_Click(object sender, RoutedEventArgs e)
@@ -111,6 +125,7 @@ public partial class MainWindow : Window
             BuildServices();
             _monitoringCts = new CancellationTokenSource();
             SetStatus(MonitorStatus.Monitoring);
+            SetCurrentMode(T("mode.monitoring"));
             FooterText.Text = T("footer.monitoringStarted");
             _ = Task.Run(() => RunMonitoringLoopAsync(_monitoringCts.Token));
         }
@@ -135,9 +150,10 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var relayAction = await CreateRelay().ResetAsync(CancellationToken.None);
+            var relayAction = await CreateRelayBank().ResetAsync(CancellationToken.None);
             _stateMachine.Reset(_lastTemperatureC);
             SetStatus(MonitorStatus.Monitoring);
+            SetAllChannelStates(true);
             AlarmReasonText.Text = string.Empty;
             FooterText.Text = $"{T("footer.resetComplete")}: {relayAction}.";
         }
@@ -152,13 +168,15 @@ public partial class MainWindow : Window
         try
         {
             await SaveSettingsFromUiAsync();
-            if (!ValidateRelaySetup(requireResetHex: false))
+            if (!ValidateRelaySetup(requireRestore: false))
             {
                 return;
             }
 
-            var action = await CreateRelay().TestStopAsync(CancellationToken.None);
-            FooterText.Text = $"{T("footer.relayTestComplete")}: {action}.";
+            await CreateRelayBank().OpenAllInterlocksAsync(CancellationToken.None);
+            SetAllChannelStates(false);
+            SetCurrentMode(T("mode.engineering"));
+            FooterText.Text = T("footer.allDisconnected");
         }
         catch (Exception ex)
         {
@@ -171,13 +189,51 @@ public partial class MainWindow : Window
         try
         {
             await SaveSettingsFromUiAsync();
-            if (!ValidateRelaySetup(requireResetHex: true))
+            if (!ValidateRelaySetup(requireRestore: true))
             {
                 return;
             }
 
-            var action = await CreateRelay().ResetAsync(CancellationToken.None);
-            FooterText.Text = $"{T("footer.relayResetComplete")}: {action}.";
+            await CreateRelayBank().CloseAllInterlocksAsync(CancellationToken.None);
+            SetAllChannelStates(true);
+            SetCurrentMode(T("mode.engineering"));
+            FooterText.Text = T("footer.allConnected");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private async void ChannelOpenButton_Click(object sender, RoutedEventArgs e)
+    {
+        await ExecuteChannelActionAsync(sender, closed: false, T("footer.channelDisconnected"));
+    }
+
+    private async void ChannelCloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        await ExecuteChannelActionAsync(sender, closed: true, T("footer.channelConnected"));
+    }
+
+    private async Task ExecuteChannelActionAsync(object sender, bool closed, string footerTemplate)
+    {
+        try
+        {
+            await SaveSettingsFromUiAsync();
+            if (sender is not FrameworkElement { Tag: string tag } || !int.TryParse(tag, out var channelNumber))
+            {
+                return;
+            }
+
+            if (!ValidateRelaySetup(requireRestore: true, specificChannelNumber: channelNumber))
+            {
+                return;
+            }
+
+            await CreateRelayBank().SetChannelClosedAsync(channelNumber, closed, CancellationToken.None);
+            SetChannelState(channelNumber, closed);
+            SetCurrentMode(T("mode.engineering"));
+            FooterText.Text = string.Format(CultureInfo.InvariantCulture, footerTemplate, channelNumber);
         }
         catch (Exception ex)
         {
@@ -232,8 +288,69 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void AdvancedSettingsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await SaveSettingsFromUiAsync();
+            var window = new AdvancedSettingsWindow(_settings.Relay, NormalizeLanguage(_settings.Language))
+            {
+                Owner = this
+            };
+
+            if (window.ShowDialog() != true)
+            {
+                return;
+            }
+
+            _settings.Relay = window.ResultSettings;
+            await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            BuildServices();
+            BindSettingsToUi();
+            ApplyLanguage();
+            FooterText.Text = T("footer.advancedSaved");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        MessageBox.Show(this, T("about.body"), T("about.title"), MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    private async void RestoreMonitoringControlButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await SaveSettingsFromUiAsync();
+            if (!ValidateRelaySetup(requireRestore: true))
+            {
+                return;
+            }
+
+            await CreateRelayBank().CloseAllInterlocksAsync(CancellationToken.None);
+            SetAllChannelStates(true);
+            SetCurrentMode(T("mode.monitoring"));
+            MainTabControl.SelectedItem = MonitorTab;
+            FooterText.Text = T("footer.monitoringControlRestored");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
     private void BuildServices()
     {
+        _settings.Relay.Normalize();
         var dataDirectory = Path.IsPathRooted(_settings.DataDirectory)
             ? _settings.DataDirectory
             : Path.Combine(AppContext.BaseDirectory, _settings.DataDirectory);
@@ -242,11 +359,11 @@ public partial class MainWindow : Window
         _stateMachine = new InterlockStateMachine(new InterlockSettings(_settings.ThresholdC));
         var reader = new TesseractCliTemperatureReader(new WindowCapture(), new TemperatureTextParser(), _settings);
         var autoReset = new AutoResetOptions(_settings.AutoResetEnabled, _settings.RecoveryThresholdC, _settings.RecoveryStableSeconds);
-        _monitoringService = new MonitoringService(reader, CreateRelay(), _sampleLog, new SystemClock(), _stateMachine, autoReset);
+        _monitoringService = new MonitoringService(reader, CreateRelayBank(), _sampleLog, new SystemClock(), _stateMachine, autoReset);
         _monitoringService.SampleRecorded += MonitoringService_SampleRecorded;
     }
 
-    private IRelayController CreateRelay()
+    private IRelayBankController CreateRelayBank()
     {
         return _settings.Relay.DryRun
             ? new DryRunRelayController()
@@ -297,11 +414,13 @@ public partial class MainWindow : Window
             return false;
         }
 
-        return ValidateRelaySetup(requireResetHex: true);
+        return ValidateRelaySetup(requireRestore: true);
     }
 
-    private bool ValidateRelaySetup(bool requireResetHex)
+    private bool ValidateRelaySetup(bool requireRestore, int? specificChannelNumber = null)
     {
+        _settings.Relay.Normalize();
+
         if (_settings.Relay.DryRun)
         {
             return true;
@@ -314,12 +433,31 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (!ValidateRelayCommand(_settings.Relay.StopCommandHex, T("label.stopHex")))
+        var channels = _settings.Relay.Channels
+            .Where(channel => channel.Enabled && (specificChannelNumber is null || channel.ChannelNumber == specificChannelNumber.Value))
+            .OrderBy(channel => channel.ChannelNumber)
+            .ToList();
+
+        if (channels.Count == 0)
         {
+            ShowSetupWarning(T("message.noRelayChannels"));
             return false;
         }
 
-        return !requireResetHex || ValidateRelayCommand(_settings.Relay.ResetCommandHex, T("label.resetHex"));
+        foreach (var channel in channels)
+        {
+            if (!ValidateRelayCommand(channel.OpenCommand, $"{channel.DisplayName} {T("label.disconnect")}"))
+            {
+                return false;
+            }
+
+            if (requireRestore && !ValidateRelayCommand(channel.CloseCommand, $"{channel.DisplayName} {T("label.connect")}"))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool ValidateRelayCommand(string commandText, string label)
@@ -357,20 +495,21 @@ public partial class MainWindow : Window
             RawOcrText.Text = string.IsNullOrWhiteSpace(sample.RawOcrText) ? "(empty OCR text)" : sample.RawOcrText;
             SetStatus(sample.Status);
             AlarmReasonText.Text = sample.AlarmReason;
+
+            if (sample.RelayAction == RelayAction.StopSent)
+            {
+                SetAllChannelStates(false);
+                SetCurrentMode(T("mode.monitoring"));
+            }
+            else if (sample.RelayAction == RelayAction.ResetSent)
+            {
+                SetAllChannelStates(true);
+                SetCurrentMode(T("mode.monitoring"));
+            }
+
             FooterText.Text = sample.RelayAction == RelayAction.StopSent
                 ? T("footer.tripped")
                 : $"{T("footer.lastSample")}: {sample.Timestamp:HH:mm:ss}";
-
-            if (sample.Status == MonitorStatus.Tripped)
-            {
-                StatusText.Foreground = System.Windows.Media.Brushes.DarkRed;
-                TemperatureText.Foreground = System.Windows.Media.Brushes.DarkRed;
-            }
-            else
-            {
-                StatusText.Foreground = System.Windows.Media.Brushes.Black;
-                TemperatureText.Foreground = System.Windows.Media.Brushes.Black;
-            }
 
             DrawTemperatureChart();
         });
@@ -381,6 +520,20 @@ public partial class MainWindow : Window
         foreach (var sample in await _sampleLog.ReadRecentAsync(200, CancellationToken.None))
         {
             _history.Insert(0, sample);
+        }
+
+        var latest = _history.FirstOrDefault();
+        if (latest is not null)
+        {
+            _lastTemperatureC = latest.TemperatureC;
+            if (latest.RelayAction == RelayAction.StopSent || latest.Status == MonitorStatus.Tripped)
+            {
+                SetAllChannelStates(false);
+            }
+            else if (latest.RelayAction == RelayAction.ResetSent || latest.Status == MonitorStatus.Monitoring)
+            {
+                SetAllChannelStates(true);
+            }
         }
 
         DrawTemperatureChart();
@@ -406,9 +559,6 @@ public partial class MainWindow : Window
         TesseractPathBox.Text = _settings.Ocr.TesseractExePath;
         IntervalBox.Text = _settings.PollIntervalMs.ToString(CultureInfo.InvariantCulture);
         PortBox.Text = _settings.Relay.PortName;
-        BaudBox.Text = _settings.Relay.BaudRate.ToString(CultureInfo.InvariantCulture);
-        StopHexBox.Text = _settings.Relay.StopCommandHex;
-        ResetHexBox.Text = _settings.Relay.ResetCommandHex;
         DryRunBox.IsChecked = _settings.Relay.DryRun;
         AutoResetBox.IsChecked = _settings.AutoResetEnabled;
         _isBindingSettings = false;
@@ -425,10 +575,8 @@ public partial class MainWindow : Window
         _settings.PollIntervalMs = ParseInt(IntervalBox.Text, nameof(_settings.PollIntervalMs));
         _settings.Ocr.TesseractExePath = TesseractPathBox.Text.Trim();
         _settings.Relay.PortName = PortBox.Text.Trim();
-        _settings.Relay.BaudRate = ParseInt(BaudBox.Text, nameof(_settings.Relay.BaudRate));
-        _settings.Relay.StopCommandHex = StopHexBox.Text.Trim();
-        _settings.Relay.ResetCommandHex = ResetHexBox.Text.Trim();
         _settings.Relay.DryRun = DryRunBox.IsChecked == true;
+        _settings.Relay.Normalize();
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
     }
 
@@ -454,31 +602,51 @@ public partial class MainWindow : Window
         Title = T("app.title");
         TitleText.Text = T("app.title");
         SubtitleText.Text = T("app.subtitle");
+        FileMenu.Header = T("menu.file");
+        ExportMenuItem.Header = T("menu.export");
+        ExitMenuItem.Header = T("menu.exit");
+        ToolsMenu.Header = T("menu.tools");
+        SelectRoiMenuItem.Header = T("button.selectRoi");
+        GuideMenuItem.Header = T("button.guide");
+        AdvancedSettingsMenuItem.Header = T("menu.advanced");
+        HelpMenu.Header = T("menu.help");
+        WiringNotesMenuItem.Header = T("menu.wiring");
+        AboutMenuItem.Header = T("menu.about");
         StatusLabel.Text = T("label.status");
-        TemperatureGroup.Header = T("group.temperature");
-        ControlsGroup.Header = T("group.controls");
-        ConfigurationGroup.Header = T("group.configuration");
-        ChartGroup.Header = T("group.chart");
-        SelectRoiButton.Content = T("button.selectRoi");
+        TemperatureCardLabel.Text = T("group.temperature");
+        RelaySummaryLabel.Text = T("label.relayBank");
+        CurrentModeLabel.Text = T("label.currentMode");
+        EngineeringHintText.Text = T("engineering.hint");
+        MonitorTab.Header = T("tab.monitor");
+        EngineeringTab.Header = T("tab.engineering");
+        ControlsCardTitle.Text = T("group.controls");
+        SettingsCardTitle.Text = T("group.configuration");
+        ChartGroupTitle.Text = T("group.chart");
+        HistoryCardTitle.Text = T("group.history");
+        EngineeringCardTitle.Text = T("group.engineering");
+        EngineeringActionsTitle.Text = T("group.groupedActions");
+        EngineeringNotesTitle.Text = T("group.wiringNotes");
+        EngineeringChecklistText.Text = T("engineering.checklist");
+        EngineeringNotesText.Text = T("engineering.notes");
         StartButton.Content = T("button.start");
         StopButton.Content = T("button.stop");
         ResetButton.Content = T("button.reset");
-        TestRelayButton.Content = T("button.testRelay");
-        TestRelayResetButton.Content = T("button.testRelayReset");
+        SelectRoiButton.Content = T("button.selectRoi");
         ExportButton.Content = T("button.export");
-        OpenGuideButton.Content = T("button.guide");
+        TestRelayButton.Content = T("button.disconnectAll");
+        TestRelayResetButton.Content = T("button.connectAll");
+        TripAllEngineeringButton.Content = T("button.disconnectAll");
+        RestoreAllEngineeringButton.Content = T("button.connectAll");
+        RestoreMonitoringControlButton.Content = T("button.restoreMonitoring");
         SaveSettingsButton.Content = T("button.save");
         WindowLabel.Text = T("label.window");
         ThresholdLabel.Text = T("label.threshold");
         TesseractLabel.Text = T("label.tesseract");
         IntervalLabel.Text = T("label.interval");
         PortLabel.Text = T("label.com");
-        BaudLabel.Text = T("label.baud");
-        StopHexLabel.Text = T("label.stopHex");
-        ResetHexLabel.Text = T("label.resetHex");
-        LanguageLabel.Text = T("label.language");
         RecoveryLabel.Text = T("label.recovery");
         StableSecondsLabel.Text = T("label.stable");
+        LanguageLabel.Text = T("label.language");
         DryRunBox.Content = T("check.dryRun");
         AutoResetBox.Content = T("check.autoReset");
         TimeColumn.Header = T("grid.time");
@@ -487,13 +655,106 @@ public partial class MainWindow : Window
         RelayColumn.Header = T("grid.relay");
         ReasonColumn.Header = T("grid.reason");
         RoiColumn.Header = T("grid.roi");
+        ApplyChannelLabels();
         SetStatus(_currentStatus);
-        if (FooterText.Text == "Ready." || FooterText.Text == UiText.Get("en", "footer.ready"))
+
+        if (string.IsNullOrWhiteSpace(FooterText.Text) || FooterText.Text == "Ready." || FooterText.Text == UiText.Get("en", "footer.ready"))
         {
             FooterText.Text = T("footer.ready");
         }
 
         DrawTemperatureChart();
+        UpdateRelayBankStatus();
+    }
+
+    private void ApplyChannelLabels()
+    {
+        foreach (var channel in _channelUis)
+        {
+            var configured = _settings.Relay.Channels.FirstOrDefault(item => item.ChannelNumber == channel.ChannelNumber);
+            channel.NameText.Text = configured?.DisplayName ?? $"CH{channel.ChannelNumber}";
+            channel.MappingText.Text = T($"channel.{channel.ChannelNumber}.mapping");
+            channel.OpenButton.Content = T("button.disconnect");
+            channel.CloseButton.Content = T("button.connect");
+        }
+    }
+
+    private void SetAllChannelStates(bool? closed)
+    {
+        foreach (var channel in _channelUis)
+        {
+            _channelStates[channel.ChannelNumber] = closed;
+        }
+
+        UpdateRelayBankStatus();
+    }
+
+    private void SetChannelState(int channelNumber, bool? closed)
+    {
+        _channelStates[channelNumber] = closed;
+        UpdateRelayBankStatus();
+    }
+
+    private void UpdateRelayBankStatus()
+    {
+        foreach (var channel in _channelUis)
+        {
+            var state = _channelStates.TryGetValue(channel.ChannelNumber, out var value) ? value : null;
+            channel.StateText.Text = state switch
+            {
+                true => T("state.connected"),
+                false => T("state.disconnected"),
+                _ => T("state.unknown")
+            };
+        }
+
+        RelayBankStatusText.Text = string.Join("  |  ", _channelUis.Select(channel =>
+        {
+            var state = _channelStates.TryGetValue(channel.ChannelNumber, out var value) ? value : null;
+            var label = state switch
+            {
+                true => T("state.connected"),
+                false => T("state.disconnected"),
+                _ => T("state.unknown")
+            };
+
+            return $"CH{channel.ChannelNumber}: {label}";
+        }));
+    }
+
+    private void SetStatus(MonitorStatus status)
+    {
+        _currentStatus = status;
+        StatusText.Text = T($"status.{status}");
+
+        switch (status)
+        {
+            case MonitorStatus.Tripped:
+                StatusBadgeBorder.Background = new SolidColorBrush(Color.FromRgb(254, 226, 226));
+                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(153, 27, 27));
+                TemperatureText.Foreground = new SolidColorBrush(Color.FromRgb(153, 27, 27));
+                break;
+            case MonitorStatus.Monitoring:
+                StatusBadgeBorder.Background = new SolidColorBrush(Color.FromRgb(220, 252, 231));
+                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(22, 101, 52));
+                TemperatureText.Foreground = new SolidColorBrush(Color.FromRgb(15, 23, 42));
+                break;
+            case MonitorStatus.NoReading:
+                StatusBadgeBorder.Background = new SolidColorBrush(Color.FromRgb(254, 249, 195));
+                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(133, 77, 14));
+                TemperatureText.Foreground = new SolidColorBrush(Color.FromRgb(15, 23, 42));
+                break;
+            default:
+                StatusBadgeBorder.Background = new SolidColorBrush(Color.FromRgb(226, 232, 240));
+                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(15, 23, 42));
+                TemperatureText.Foreground = new SolidColorBrush(Color.FromRgb(15, 23, 42));
+                break;
+        }
+    }
+
+    private void SetCurrentMode(string text)
+    {
+        CurrentModeText.Text = text;
     }
 
     private void DrawTemperatureChart()
@@ -605,12 +866,6 @@ public partial class MainWindow : Window
         TemperatureChartCanvas.Children.Add(block);
     }
 
-    private void SetStatus(MonitorStatus status)
-    {
-        _currentStatus = status;
-        StatusText.Text = T($"status.{status}");
-    }
-
     private string T(string key)
     {
         return UiText.Get(NormalizeLanguage(_settings?.Language ?? "en"), key);
@@ -644,7 +899,7 @@ public partial class MainWindow : Window
     private void ShowError(Exception ex)
     {
         FooterText.Text = ex.Message;
-        MessageBox.Show(this, ex.Message, "G2000 Soft Interlock", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(this, ex.Message, T("app.title"), MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
     private void ShowSetupWarning(string message)
@@ -652,4 +907,12 @@ public partial class MainWindow : Window
         FooterText.Text = message;
         MessageBox.Show(this, message, T("message.setupRequiredTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
     }
+
+    private sealed record ChannelUi(
+        int ChannelNumber,
+        TextBlock NameText,
+        TextBlock MappingText,
+        TextBlock StateText,
+        Button OpenButton,
+        Button CloseButton);
 }
