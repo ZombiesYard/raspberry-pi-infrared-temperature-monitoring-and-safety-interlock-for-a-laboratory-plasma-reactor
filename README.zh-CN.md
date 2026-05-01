@@ -43,6 +43,12 @@
 - Trip 动作：断开所有启用通道
 - Restore 动作：闭合所有启用通道
 
+如果你要按照软件控制继电器的方式做现场验证，请直接使用这份 Engineering 实操 checklist：
+
+- [docs/Engineering-Checklist.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.md)
+- [docs/Engineering-Checklist.zh-CN.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.zh-CN.md)
+- [docs/Engineering-Checklist.de.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.de.md)
+
 ## 软件如何工作
 
 1. 根据 `Window` 字段查找 HikmicroAnalyzer 窗口。

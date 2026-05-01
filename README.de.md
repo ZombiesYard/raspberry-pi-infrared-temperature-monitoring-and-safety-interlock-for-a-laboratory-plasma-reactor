@@ -43,6 +43,12 @@ Deshalb verwendet dieser Branch jetzt standardmaessig eine Engineering-Relaisban
 - Trip-Aktion: alle aktivierten Kanaele oeffnen
 - Restore-Aktion: alle aktivierten Kanaele schliessen
 
+Fuer einen praktischen softwaregesteuerten Validierungsablauf direkt auf der Engineering-Seite diese Checkliste verwenden:
+
+- [docs/Engineering-Checklist.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.md)
+- [docs/Engineering-Checklist.zh-CN.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.zh-CN.md)
+- [docs/Engineering-Checklist.de.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.de.md)
+
 ## Funktionsweise
 
 1. Das Programm sucht ein sichtbares HikmicroAnalyzer-Fenster über den Text im Feld `Window`.
