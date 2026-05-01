@@ -9,3 +9,4 @@ src/ReactorSoftInterlock.Wpf/data/
 artifacts/
 src/Backup/
 src/UpgradeLog.htm
+tesseract-ocr-w64-setup-*.exe
