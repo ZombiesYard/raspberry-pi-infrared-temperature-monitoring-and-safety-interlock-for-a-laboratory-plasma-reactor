@@ -643,10 +643,10 @@ public partial class MainWindow : Window
         ThresholdLabel.Text = T("label.threshold");
         TesseractLabel.Text = T("label.tesseract");
         IntervalLabel.Text = T("label.interval");
-        PortLabel.Text = T("label.com");
+        PortQuickLabel.Text = T("label.com");
         RecoveryLabel.Text = T("label.recovery");
         StableSecondsLabel.Text = T("label.stable");
-        LanguageLabel.Text = T("label.language");
+        LanguageQuickLabel.Text = T("label.language");
         DryRunBox.Content = T("check.dryRun");
         AutoResetBox.Content = T("check.autoReset");
         TimeColumn.Header = T("grid.time");

@@ -136,56 +136,69 @@
               <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <StackPanel Grid.Column="0">
-              <Border Style="{StaticResource CardBorderStyle}">
-                <StackPanel>
-                  <TextBlock x:Name="ControlsCardTitle" Text="Primary Actions" Style="{StaticResource CardTitleStyle}" />
-                  <Button x:Name="StartButton" Style="{StaticResource PrimaryButtonStyle}" Content="Start" Click="StartButton_Click" />
-                  <Button x:Name="StopButton" Style="{StaticResource SecondaryButtonStyle}" Content="Stop" Click="StopButton_Click" />
-                  <Button x:Name="ResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Reset" Click="ResetButton_Click" />
-                  <Button x:Name="SelectRoiButton" Style="{StaticResource SecondaryButtonStyle}" Content="Select ROI" Click="SelectRoiButton_Click" />
-                  <Button x:Name="ExportButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export CSV" Click="ExportButton_Click" />
-                  <Separator Margin="0,6,0,12" />
-                  <Button x:Name="TestRelayButton" Style="{StaticResource SecondaryButtonStyle}" Content="Disconnect All Interlocks" Click="TestRelayButton_Click" />
-                  <Button x:Name="TestRelayResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Connect All Interlocks" Click="TestRelayResetButton_Click" />
-                </StackPanel>
-              </Border>
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel>
+                <Border Style="{StaticResource CardBorderStyle}">
+                  <StackPanel>
+                    <TextBlock x:Name="ControlsCardTitle" Text="Primary Actions" Style="{StaticResource CardTitleStyle}" />
 
-              <Border Style="{StaticResource CardBorderStyle}">
-                <StackPanel>
-                  <TextBlock x:Name="SettingsCardTitle" Text="Everyday Settings" Style="{StaticResource CardTitleStyle}" />
+                    <Grid Margin="0,0,0,10">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <StackPanel Grid.Column="0">
+                        <TextBlock x:Name="LanguageQuickLabel" Style="{StaticResource LabelStyle}" Text="Language" />
+                        <ComboBox x:Name="LanguageBox" Style="{StaticResource ComboStyle}" Margin="0" DisplayMemberPath="DisplayName" SelectedValuePath="Code" SelectionChanged="LanguageBox_SelectionChanged" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="2">
+                        <TextBlock x:Name="PortQuickLabel" Style="{StaticResource LabelStyle}" Text="COM Port" />
+                        <TextBox x:Name="PortBox" Style="{StaticResource InputStyle}" Margin="0" />
+                      </StackPanel>
+                    </Grid>
 
-                  <TextBlock x:Name="WindowLabel" Style="{StaticResource LabelStyle}" Text="Window" />
-                  <TextBox x:Name="WindowTitleBox" Style="{StaticResource InputStyle}" />
+                    <Button x:Name="StartButton" Style="{StaticResource PrimaryButtonStyle}" Content="Start" Click="StartButton_Click" />
+                    <Button x:Name="StopButton" Style="{StaticResource SecondaryButtonStyle}" Content="Stop" Click="StopButton_Click" />
+                    <Button x:Name="ResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Reset" Click="ResetButton_Click" />
+                    <Button x:Name="SelectRoiButton" Style="{StaticResource SecondaryButtonStyle}" Content="Select ROI" Click="SelectRoiButton_Click" />
+                    <Button x:Name="ExportButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export CSV" Click="ExportButton_Click" />
+                    <Separator Margin="0,6,0,12" />
+                    <Button x:Name="TestRelayButton" Style="{StaticResource SecondaryButtonStyle}" Content="Disconnect All Interlocks" Click="TestRelayButton_Click" />
+                    <Button x:Name="TestRelayResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Connect All Interlocks" Click="TestRelayResetButton_Click" />
+                  </StackPanel>
+                </Border>
 
-                  <TextBlock x:Name="TesseractLabel" Style="{StaticResource LabelStyle}" Text="Tesseract" />
-                  <TextBox x:Name="TesseractPathBox" Style="{StaticResource InputStyle}" />
+                <Border Style="{StaticResource CardBorderStyle}">
+                  <StackPanel>
+                    <TextBlock x:Name="SettingsCardTitle" Text="Everyday Settings" Style="{StaticResource CardTitleStyle}" />
 
-                  <TextBlock x:Name="PortLabel" Style="{StaticResource LabelStyle}" Text="COM Port" />
-                  <TextBox x:Name="PortBox" Style="{StaticResource InputStyle}" />
+                    <TextBlock x:Name="WindowLabel" Style="{StaticResource LabelStyle}" Text="Window" />
+                    <TextBox x:Name="WindowTitleBox" Style="{StaticResource InputStyle}" />
 
-                  <TextBlock x:Name="ThresholdLabel" Style="{StaticResource LabelStyle}" Text="Threshold C" />
-                  <TextBox x:Name="ThresholdBox" Style="{StaticResource InputStyle}" />
+                    <TextBlock x:Name="TesseractLabel" Style="{StaticResource LabelStyle}" Text="Tesseract" />
+                    <TextBox x:Name="TesseractPathBox" Style="{StaticResource InputStyle}" />
 
-                  <TextBlock x:Name="IntervalLabel" Style="{StaticResource LabelStyle}" Text="Interval ms" />
-                  <TextBox x:Name="IntervalBox" Style="{StaticResource InputStyle}" />
+                    <TextBlock x:Name="ThresholdLabel" Style="{StaticResource LabelStyle}" Text="Threshold C" />
+                    <TextBox x:Name="ThresholdBox" Style="{StaticResource InputStyle}" />
 
-                  <TextBlock x:Name="RecoveryLabel" Style="{StaticResource LabelStyle}" Text="Recovery C" />
-                  <TextBox x:Name="RecoveryThresholdBox" Style="{StaticResource InputStyle}" />
+                    <TextBlock x:Name="IntervalLabel" Style="{StaticResource LabelStyle}" Text="Interval ms" />
+                    <TextBox x:Name="IntervalBox" Style="{StaticResource InputStyle}" />
 
-                  <TextBlock x:Name="StableSecondsLabel" Style="{StaticResource LabelStyle}" Text="Stable sec" />
-                  <TextBox x:Name="StableSecondsBox" Style="{StaticResource InputStyle}" />
+                    <TextBlock x:Name="RecoveryLabel" Style="{StaticResource LabelStyle}" Text="Recovery C" />
+                    <TextBox x:Name="RecoveryThresholdBox" Style="{StaticResource InputStyle}" />
 
-                  <TextBlock x:Name="LanguageLabel" Style="{StaticResource LabelStyle}" Text="Language" />
-                  <ComboBox x:Name="LanguageBox" Style="{StaticResource ComboStyle}" DisplayMemberPath="DisplayName" SelectedValuePath="Code" SelectionChanged="LanguageBox_SelectionChanged" />
+                    <TextBlock x:Name="StableSecondsLabel" Style="{StaticResource LabelStyle}" Text="Stable sec" />
+                    <TextBox x:Name="StableSecondsBox" Style="{StaticResource InputStyle}" />
 
-                  <CheckBox x:Name="DryRunBox" Content="Dry run relay" Margin="0,0,0,10" />
-                  <CheckBox x:Name="AutoResetBox" Content="Auto reset" Margin="0,0,0,14" />
+                    <CheckBox x:Name="DryRunBox" Content="Dry run relay" Margin="0,0,0,10" />
+                    <CheckBox x:Name="AutoResetBox" Content="Auto reset" Margin="0,0,0,14" />
 
-                  <Button x:Name="SaveSettingsButton" Style="{StaticResource PrimaryButtonStyle}" Content="Save Settings" Click="SaveSettingsButton_Click" Margin="0" />
-                </StackPanel>
-              </Border>
-            </StackPanel>
+                    <Button x:Name="SaveSettingsButton" Style="{StaticResource PrimaryButtonStyle}" Content="Save Settings" Click="SaveSettingsButton_Click" Margin="0" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
 
             <Grid Grid.Column="2">
               <Grid.RowDefinitions>
