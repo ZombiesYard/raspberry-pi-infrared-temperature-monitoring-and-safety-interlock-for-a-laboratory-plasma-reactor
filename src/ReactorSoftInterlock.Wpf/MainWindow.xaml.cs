@@ -166,6 +166,34 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void TestRelayResetButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await SaveSettingsFromUiAsync();
+            if (!ValidateRelaySetup(requireResetHex: true))
+            {
+                return;
+            }
+
+            var action = await CreateRelay().ResetAsync(CancellationToken.None);
+            FooterText.Text = $"{T("footer.relayResetComplete")}: {action}.";
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private void OpenGuideButton_Click(object sender, RoutedEventArgs e)
+    {
+        var guide = new GuideWindow(T("guide.title"), T("guide.body"))
+        {
+            Owner = this
+        };
+        guide.ShowDialog();
+    }
+
     private async void ExportButton_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -253,7 +281,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (!ExecutableExists(_settings.Ocr.TesseractExePath))
+        if (!RuntimePathResolver.ExecutableExists(_settings.Ocr.TesseractExePath))
         {
             ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.tesseractMissing"), _settings.Ocr.TesseractExePath));
             return false;
@@ -286,58 +314,30 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (!ValidateHexCommand(_settings.Relay.StopCommandHex, T("label.stopHex")))
+        if (!ValidateRelayCommand(_settings.Relay.StopCommandHex, T("label.stopHex")))
         {
             return false;
         }
 
-        return !requireResetHex || ValidateHexCommand(_settings.Relay.ResetCommandHex, T("label.resetHex"));
+        return !requireResetHex || ValidateRelayCommand(_settings.Relay.ResetCommandHex, T("label.resetHex"));
     }
 
-    private bool ValidateHexCommand(string hex, string label)
+    private bool ValidateRelayCommand(string commandText, string label)
     {
-        try
+        var commands = RelayCommandTextParser.Parse(commandText);
+        if (commands.Count == 0)
         {
-            if (HexCommandParser.Parse(hex).Length == 0)
-            {
-                ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexMissing"), label));
-                return false;
-            }
-        }
-        catch (FormatException ex)
-        {
-            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexInvalid"), label, ex.Message));
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexMissing"), label));
             return false;
         }
-        catch (OverflowException ex)
+
+        if (commands.Any(static command => !command.StartsWith("AT", StringComparison.OrdinalIgnoreCase)))
         {
-            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexInvalid"), label, ex.Message));
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.hexInvalid"), label, commandText));
             return false;
         }
 
         return true;
-    }
-
-    private static bool ExecutableExists(string executablePath)
-    {
-        if (string.IsNullOrWhiteSpace(executablePath))
-        {
-            return false;
-        }
-
-        if (Path.IsPathFullyQualified(executablePath) || executablePath.Contains(Path.DirectorySeparatorChar) || executablePath.Contains(Path.AltDirectorySeparatorChar))
-        {
-            return File.Exists(executablePath);
-        }
-
-        if (File.Exists(Path.Combine(AppContext.BaseDirectory, executablePath)))
-        {
-            return true;
-        }
-
-        var paths = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return paths.Any(path => File.Exists(Path.Combine(path, executablePath)));
     }
 
     private void MonitoringService_SampleRecorded(object? sender, TemperatureSample sample)
@@ -464,7 +464,9 @@ public partial class MainWindow : Window
         StopButton.Content = T("button.stop");
         ResetButton.Content = T("button.reset");
         TestRelayButton.Content = T("button.testRelay");
+        TestRelayResetButton.Content = T("button.testRelayReset");
         ExportButton.Content = T("button.export");
+        OpenGuideButton.Content = T("button.guide");
         SaveSettingsButton.Content = T("button.save");
         WindowLabel.Text = T("label.window");
         ThresholdLabel.Text = T("label.threshold");

@@ -1,0 +1,20 @@
+Offline package contents
+========================
+
+1. Install the CP210x driver from:
+   offline-deps\cp210x-driver\silabser.inf
+
+2. Put a full offline Tesseract folder in:
+   offline-deps\tesseract\
+
+   The final executable path must be:
+   offline-deps\tesseract\tesseract.exe
+
+3. Run:
+   ReactorSoftInterlock.Wpf.exe
+
+4. For the current relay-interlock-test branch:
+   - COM Port default: COM3
+   - Stop command default: AT+CH1=0
+   - Reset command default: AT+CH1=1
+   - Verified G2000 test wiring: I1 -> COM1, I2 -> NO1

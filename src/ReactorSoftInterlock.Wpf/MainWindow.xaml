@@ -44,13 +44,15 @@
       </GroupBox>
 
       <GroupBox x:Name="ControlsGroup" Grid.Column="1" Header="Controls" Padding="10" Margin="0,0,8,0">
-        <UniformGrid Columns="2" Rows="3">
+        <UniformGrid Columns="2" Rows="4">
           <Button x:Name="SelectRoiButton" Content="Select ROI" Click="SelectRoiButton_Click" Margin="4" MinHeight="38" />
           <Button x:Name="StartButton" Content="Start" Click="StartButton_Click" Margin="4" MinHeight="38" />
           <Button x:Name="StopButton" Content="Stop" Click="StopButton_Click" Margin="4" MinHeight="38" />
           <Button x:Name="ResetButton" Content="Reset" Click="ResetButton_Click" Margin="4" MinHeight="38" />
           <Button x:Name="TestRelayButton" Content="Test Relay Stop" Click="TestRelayButton_Click" Margin="4" MinHeight="38" />
+          <Button x:Name="TestRelayResetButton" Content="Test Relay Restore" Click="TestRelayResetButton_Click" Margin="4" MinHeight="38" />
           <Button x:Name="ExportButton" Content="Export CSV" Click="ExportButton_Click" Margin="4" MinHeight="38" />
+          <Button x:Name="OpenGuideButton" Content="Open Lab Guide" Click="OpenGuideButton_Click" Margin="4" MinHeight="38" />
         </UniformGrid>
       </GroupBox>
 
@@ -87,9 +89,9 @@
           <TextBlock x:Name="BaudLabel" Text="Baud" Grid.Row="2" Grid.Column="2" Margin="0,4,8,4" />
           <TextBox x:Name="BaudBox" Grid.Row="2" Grid.Column="3" Margin="0,2,0,2" />
 
-          <TextBlock x:Name="StopHexLabel" Text="Stop HEX" Grid.Row="3" Grid.Column="0" Margin="0,4,8,4" />
+          <TextBlock x:Name="StopHexLabel" Text="Stop command" Grid.Row="3" Grid.Column="0" Margin="0,4,8,4" />
           <TextBox x:Name="StopHexBox" Grid.Row="3" Grid.Column="1" Margin="0,2,12,2" />
-          <TextBlock x:Name="ResetHexLabel" Text="Reset HEX" Grid.Row="3" Grid.Column="2" Margin="0,4,8,4" />
+          <TextBlock x:Name="ResetHexLabel" Text="Reset command" Grid.Row="3" Grid.Column="2" Margin="0,4,8,4" />
           <TextBox x:Name="ResetHexBox" Grid.Row="3" Grid.Column="3" Margin="0,2,0,2" />
 
           <TextBlock x:Name="LanguageLabel" Text="Language" Grid.Row="4" Grid.Column="0" Margin="0,4,8,4" />

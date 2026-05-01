@@ -51,7 +51,7 @@ public sealed class TesseractCliTemperatureReader : ITemperatureReader
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = _settings.Ocr.TesseractExePath,
+                FileName = RuntimePathResolver.ResolveExecutablePath(_settings.Ocr.TesseractExePath),
                 Arguments = arguments,
                 UseShellExecute = false,
                 CreateNoWindow = true,
