@@ -14,10 +14,30 @@ Das System besteht aus vier Teilen:
 
 - HIKMICRO-Kamera und HikmicroAnalyzer: zeigt Wärmebild und genaue Temperatur-Overlay-Werte.
 - Diese WPF-Anwendung: erfasst den Temperaturtext per Screenshot und entscheidet über den Trip.
-- USB-Seriell-Relais: erhält HEX-Befehle vom Windows-PC.
+- USB-Seriell-Relais: erhält Relaisbefehle vom Windows-PC. Im aktuellen Branch `relay-interlock-test` wurde das Relais `DSD TECH SH-UR04A` mit ASCII-AT-Befehlen verifiziert.
 - G2000 Verriegelung / Not-Aus: der Relaiskontakt wird als potentialfreier Trockenkontakt in den bestätigten externen Kreis eingebunden.
 
 Die Software verwendet keine HIKMICRO-Kamera-API. Sie liest das sichtbare Overlay im HikmicroAnalyzer per OCR.
+
+## Aktuell validierter Branch
+
+Der aktuelle Branch `relay-interlock-test` ist bereits auf das im Labor getestete Relais abgestimmt:
+
+- Relaisboard: `DSD TECH SH-UR04A 4CH`
+- USB-Chip / Treiber: `Silicon Labs CP210x`
+- Validierter COM-Port: `COM3`
+- Protokoll: ASCII-AT-Befehle über `9600 8N1`
+- Verifiziertes Verhalten von Kanal 1:
+  - `AT+CH1=1` -> CH1 EIN -> `COM1-NO1` geschlossen
+  - `AT+CH1=0` -> CH1 AUS -> `COM1-NC1` geschlossen
+- Verifizierte G2000-Interlock-Verdrahtung:
+  - `G2000 I1 -> COM1`
+  - `G2000 I2 -> NO1`
+
+Deshalb sind in diesem Branch standardmäßig gesetzt:
+
+- `Stop-Befehl = AT+CH1=0`
+- `Reset-Befehl = AT+CH1=1`
 
 ## Funktionsweise
 
@@ -70,7 +90,7 @@ Für den Labor-PC möglichst das self-contained Release-Paket verwenden. Dieses 
 Installation auf dem Labor-PC:
 
 1. HikmicroAnalyzer installieren und prüfen, dass Kamerabild und Maximaltemperatur-Overlay sichtbar sind.
-2. Tesseract OCR für Windows installieren. Danach entweder den Tesseract-Installationsordner zu `PATH` hinzufügen oder den vollständigen Pfad zu `tesseract.exe` in das App-Feld `Tesseract` eintragen.
+2. Tesseract OCR für Windows installieren. Für diesen Laborprototyp ist ein Community-Windows-Installer wie der Build der UB Mannheim in Ordnung. Installieren Sie ihn in einen normalen Windows-Ordner wie `C:\Program Files\Tesseract-OCR`. Installieren Sie ihn nicht direkt in den `artifacts\...`-Release-Ordner.
 3. Den USB-Seriell-Relais-Treiber installieren. Häufige Relaisboards verwenden CH340, CH341, CP210x oder FTDI; den zum Board passenden Treiber verwenden.
 4. Windows Geräte-Manager öffnen, `Ports (COM & LPT)` erweitern, das Relais einstecken und den angezeigten `COMx`-Wert notieren.
 5. `Dry run relay` aktiviert lassen, bis OCR funktioniert und das Relais ohne G2000 getestet wurde.
@@ -146,7 +166,7 @@ Labor-Release-Paket starten:
 2. `ReactorSoftInterlock.Wpf.exe` starten.
 3. Falls Windows SmartScreen erscheint, zuerst bestätigen, dass die Datei aus diesem Projekt stammt.
 4. `appsettings.json` neben der EXE belassen; die App aktualisiert diese Datei beim Speichern der Einstellungen.
-5. Wenn die App meldet, dass Tesseract, ROI, HikmicroAnalyzer, COM-Port oder HEX-Befehle fehlen, diesen Punkt zuerst beheben und erst danach die Überwachung starten.
+5. Wenn die App meldet, dass Tesseract, ROI, HikmicroAnalyzer, COM-Port oder Relaisbefehle fehlen, diesen Punkt zuerst beheben und erst danach die Überwachung starten.
 
 ## Erste Software-Einrichtung
 
@@ -155,7 +175,7 @@ Labor-Release-Paket starten:
 3. HikmicroAnalyzer sichtbar lassen, am besten maximiert.
 4. Diese Anwendung starten.
 5. In `Window` einen stabilen Teil des Fenstertitels eintragen, zum Beispiel `Hikmicro`.
-6. In `Tesseract` `tesseract.exe` oder den vollständigen Pfad eintragen.
+6. Bei `Tesseract` entweder den Standard `offline-deps\tesseract\tesseract.exe` belassen, wenn ein portabler Tesseract-Ordner mitgeliefert wird, oder den vollständigen Installationspfad eintragen, zum Beispiel `C:\Program Files\Tesseract-OCR\tesseract.exe`.
 7. `Dry run relay` aktiviert lassen.
 8. `Save Settings` klicken.
 9. `Select ROI` klicken.
@@ -184,7 +204,7 @@ Empfohlene Inbetriebnahme:
 1. `Dry run relay` aktiviert lassen und nur OCR prüfen.
 2. USB-Relais an den PC anschließen, aber noch nicht an den G2000.
 3. COM-Port im Windows Device Manager finden.
-4. `COM Port`, `Baud`, `Stop HEX` und `Reset HEX` eintragen.
+4. `COM Port`, `Baud`, `Stop-Befehl` und `Reset-Befehl` eintragen.
 5. Relaiskontakt weiter vom G2000 getrennt lassen.
 6. `Dry run relay` deaktivieren.
 7. `Test Relay Stop` klicken.
@@ -194,10 +214,12 @@ Empfohlene Inbetriebnahme:
 11. G2000-Reaktion ohne Plasma oder in einem risikoarmen Zustand prüfen.
 12. Erst danach für echte Übertemperatur-Trips verwenden.
 
-Kontaktwahl:
+Verifizierte Kontaktwahl für diesen Branch:
 
-- Wenn die G2000-Verriegelung geschlossen sein muss, um Betrieb zu erlauben, ist meist `COM` + `NC` passend, damit ein Relais-Trip den Kreis öffnet.
-- Wenn Laborverdrahtung oder Relaislogik anders sind, `COM` + `NO` verwenden oder die Relaiszustände für `Stop HEX` und `Reset HEX` tauschen.
+- Der validierte Pfad verwendet `COM1` + `NO1`.
+- Verdrahtung: `G2000 I1 -> COM1`, `G2000 I2 -> NO1`.
+- `AT+CH1=1` schließt `COM1-NO1` und stellt den Interlock wieder her.
+- `AT+CH1=0` öffnet `COM1-NO1` und löst den Interlock aus.
 - Immer mit dem Multimeter prüfen. Nicht nur auf Relais-LEDs vertrauen.
 
 ## COM-Port einrichten
@@ -216,30 +238,30 @@ Baudrate:
 - Zuerst das Handbuch des Relaisboards prüfen.
 - Häufige Werte sind `9600` und `115200`.
 - Der Wert `Baud` in der App muss zum Relaisboard passen.
-- Wenn `Test Relay Stop` nichts bewirkt, zuerst die Baudrate prüfen, danach HEX-Befehle.
+- Wenn `Test Relay Stop` nichts bewirkt, zuerst die Baudrate prüfen, danach die Relaisbefehle.
 
-HEX-Befehle:
+Relaisbefehle:
 
-- `Stop HEX` wird beim Übertemperatur-Trip gesendet.
-- `Reset HEX` wird beim manuellen Reset oder erfolgreichem Auto-Reset gesendet.
+- `Stop-Befehl` wird beim Übertemperatur-Trip gesendet.
+- `Reset-Befehl` wird beim manuellen Reset, beim Klick auf `Relais wieder schließen` oder nach erfolgreichem Auto-Reset gesendet.
 - Diese Befehle gehören zum externen USB-Relaisboard, nicht zum G2000 selbst.
-- Die App lässt beide Befehle standardmäßig leer, weil die richtigen Bytes vom tatsächlichen externen Relaismodell abhängen.
-- Nur als Beispiel: Übliche LCUS-1 / LCUS-2 / LC Technology USB-Seriell-Relaisboards mit CH340 USB-Seriell-Chip verwenden oft 9600 Baud, `A0 01 01 A2` für Kanal 1 ON und `A0 01 00 A1` für Kanal 1 OFF.
-- Akzeptierte Formate:
+- Im aktuellen `relay-interlock-test`-Branch wurde das Relais `DSD TECH SH-UR04A` getestet.
+- Standard-Serieneinstellungen:
+  - `COM Port = COM3` während der Validierung
+  - `Baud = 9600`
+  - `Data bits = 8`
+  - `Parity = None`
+  - `Stop bits = 1`
+- Standardbefehle für dieses Relais:
 
 ```text
-A0 01 01 A2
-A0-01-01-A2
-A0:01:01:A2
+Stop-Befehl  = AT+CH1=0
+Reset-Befehl = AT+CH1=1
 ```
 
+- Die Konfigurationsschlüssel in `appsettings.json` heißen aus Kompatibilitätsgründen weiterhin `StopCommandHex` und `ResetCommandHex`, speichern in diesem Branch aber ASCII-AT-Befehle statt HEX-Bytes.
+
 Wenn noch kein externes Relaisboard ausgewählt wurde, `Dry run relay` aktiviert lassen und den App-Ausgang nicht mit dem G2000 verbinden.
-
-Optionale LCUS/CH340-Kanal-1-Verdrahtung, nur wenn genau dieses externe Relaisboard verwendet wird:
-
-- Wenn der G2000-Interlock geöffnet werden muss, um Hochspannung zu stoppen, und `COM` + `NC` verwendet wird, zieht `Stop HEX = A0 01 01 A2` das Relais an und öffnet den NC-Kontakt.
-- `Reset HEX = A0 01 00 A1` lässt das Relais abfallen und schließt `COM` + `NC` wieder.
-- Wenn das Labor `COM` + `NO` verwendet, unbedingt mit dem Multimeter prüfen; Stop/Reset müssen eventuell getauscht werden.
 
 G2000-Computersteuerung:
 
@@ -250,7 +272,7 @@ G2000-Computersteuerung:
 Dry Run:
 
 - Aktiviert: die App simuliert Relaisaktionen und öffnet keinen COM-Port.
-- Deaktiviert: die App öffnet den COM-Port und sendet die konfigurierten HEX-Bytes.
+- Deaktiviert: die App öffnet den COM-Port und sendet die konfigurierten Relaisbefehle.
 
 ## Checkliste vor dem Experiment
 
@@ -337,7 +359,7 @@ Mit `Export CSV` kann die aktuelle CSV-Datei an einen gewählten Ort kopiert wer
 - USB-Relais-Treiber prüfen.
 - Programme schließen, die den seriellen Port belegen.
 - `Baud` mit dem Relaisboard abgleichen.
-- Prüfen, ob `Stop HEX` nicht leer ist und zum Relaisprotokoll passt.
+- Prüfen, ob `Stop-Befehl` nicht leer ist und zum Relaisprotokoll passt, zum Beispiel `AT+CH1=0` für das getestete DSD-Relais.
 
 ### COM port access denied
 
@@ -366,7 +388,7 @@ Mit `Export CSV` kann die aktuelle CSV-Datei an einen gewählten Ort kopiert wer
 - Kontaktlogik kann umgekehrt sein.
 - Anfangszustand des Relais kann falsch sein.
 - Nach Prüfung des Handbuchs `COM-NO` oder `COM-NC` wechseln.
-- Prüfen, ob `Stop HEX` und `Reset HEX` für dieses Relaisboard vertauscht werden müssen.
+- Prüfen, ob `Stop-Befehl` und `Reset-Befehl` für dieses Relaisboard vertauscht werden müssen.
 - Mit Multimeter prüfen, ob Reset den Verriegelungskreis in den erlaubten Zustand zurücksetzt.
 
 ### Trip kann nicht zurückgesetzt werden
@@ -385,13 +407,13 @@ Wichtige Felder:
 - `PollIntervalMs`: Standard `1000`.
 - `WindowTitleContains`: findet HikmicroAnalyzer über Fenstertitel.
 - `Roi`: gespeichert nach `Select ROI`.
-- `Ocr.TesseractExePath`: `tesseract.exe` oder voller Pfad.
+- `Ocr.TesseractExePath`: `offline-deps\tesseract\tesseract.exe`, `tesseract.exe` oder voller Pfad. Die App prüft zusätzlich übliche Windows-Installationsorte wie `C:\Program Files\Tesseract-OCR\tesseract.exe`.
 - `Ocr.Language`: Standard `eng`.
 - `Relay.DryRun`: Standard `true`.
 - `Relay.PortName`: Standard `COM3`.
 - `Relay.BaudRate`: Standard `9600`.
-- `Relay.StopCommandHex`: standardmäßig leer; aus dem Handbuch des externen Relais eintragen.
-- `Relay.ResetCommandHex`: standardmäßig leer; aus dem Handbuch des externen Relais eintragen.
+- `Relay.StopCommandHex`: speichert in diesem Branch den Stop-Befehl als Text. Standard: `AT+CH1=0`.
+- `Relay.ResetCommandHex`: speichert in diesem Branch den Reset-Befehl als Text. Standard: `AT+CH1=1`.
 - `DataDirectory`: Standard `data`.
 - `Language`: `en`, `zh-CN` oder `de`.
 - `AutoResetEnabled`: Standard `true`.
@@ -404,8 +426,4 @@ Wichtige Felder:
 dotnet test .\src\ReactorSoftInterlock.sln
 ```
 
-Aktuell erwartet:
-
-```text
-Passed: 20, Failed: 0, Skipped: 0
-```
+Erwartetes Ergebnis: alle Tests laufen erfolgreich durch.

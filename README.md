@@ -14,10 +14,30 @@ The full setup has four parts:
 
 - HIKMICRO camera and HikmicroAnalyzer: displays the live thermal image and accurate temperature overlay.
 - This WPF application: captures the temperature text from the screen and decides whether to trip.
-- USB serial relay: receives HEX commands from the Windows PC.
+- USB serial relay: receives serial relay commands from the Windows PC. In the current `relay-interlock-test` branch, the tested board is `DSD TECH SH-UR04A` and the commands are ASCII AT commands.
 - G2000 plasma generator interlock / Not-Aus loop: the relay contact is wired as a passive dry contact into the confirmed external interlock path.
 
 The app does not use a HIKMICRO API. It reads the visible HikmicroAnalyzer overlay by screenshot OCR.
+
+## Current Verified Lab Branch
+
+The current `relay-interlock-test` branch is already aligned with the relay that was physically tested on the lab bench:
+
+- Relay board: `DSD TECH SH-UR04A 4CH`
+- USB chip / driver: `Silicon Labs CP210x`
+- COM port seen during validation: `COM3`
+- Relay protocol: ASCII AT commands over `9600 8N1`
+- Verified channel 1 behavior:
+  - `AT+CH1=1` -> CH1 ON -> `COM1-NO1` closed
+  - `AT+CH1=0` -> CH1 OFF -> `COM1-NC1` closed
+- Verified G2000 interlock test path:
+  - `G2000 I1 -> COM1`
+  - `G2000 I2 -> NO1`
+
+This branch therefore defaults to:
+
+- `Stop command = AT+CH1=0`
+- `Reset command = AT+CH1=1`
 
 ## How The App Works
 
@@ -41,7 +61,7 @@ If OCR fails, the app records `NO READING`. A `NO READING` sample does not trigg
 - `src/ReactorSoftInterlock.Domain`: threshold, sample, relay action, and latched trip logic.
 - `src/ReactorSoftInterlock.Application`: monitoring loop, OCR text parsing, and ports.
 - `src/ReactorSoftInterlock.Infrastructure`: screenshot capture, Tesseract adapter, serial relay, CSV log, settings.
-- `tests/ReactorSoftInterlock.Tests`: tests for parsing, trip logic, CSV, HEX commands, and monitoring behavior.
+- `tests/ReactorSoftInterlock.Tests`: tests for parsing, trip logic, CSV, relay command parsing, and monitoring behavior.
 - `docs/g2000-soft-interlock.md`: additional hardware notes.
 - `Doc`: G2000 and project PDFs.
 - `HikmicroAnalyzer`: sample HIKMICRO images.
@@ -70,7 +90,7 @@ For a normal laboratory PC, use the self-contained Release package when possible
 Install on the lab PC:
 
 1. Install HikmicroAnalyzer and confirm that the camera image and maximum temperature overlay are visible.
-2. Install Tesseract OCR for Windows. After installation, either add the Tesseract installation folder to `PATH`, or copy the full path to `tesseract.exe` into the app field `Tesseract`.
+2. Install Tesseract OCR for Windows. A community Windows build such as the UB Mannheim installer is acceptable for this lab prototype. Install it to a normal Windows folder such as `C:\Program Files\Tesseract-OCR`. Do not point the installer directly into `artifacts\...`.
 3. Install the USB serial relay driver. Common relay boards use CH340, CH341, CP210x, or FTDI drivers; use the driver matching the relay board.
 4. Open Windows Device Manager, expand `Ports (COM & LPT)`, plug the relay in, and note the `COMx` value.
 5. Keep `Dry run relay` enabled until OCR is working and the relay has been tested without the G2000.
@@ -146,7 +166,7 @@ Run the lab Release package:
 2. Run `ReactorSoftInterlock.Wpf.exe`.
 3. If Windows SmartScreen appears, confirm that the file came from this project before continuing.
 4. Keep `appsettings.json` next to the executable; the app updates it when settings are saved.
-5. If the app warns that Tesseract, ROI, HikmicroAnalyzer, COM port, or HEX commands are missing, fix that item before starting monitoring.
+5. If the app warns that Tesseract, ROI, HikmicroAnalyzer, COM port, or relay commands are missing, fix that item before starting monitoring.
 
 ## First Software Setup
 
@@ -155,7 +175,9 @@ Run the lab Release package:
 3. Keep HikmicroAnalyzer visible, preferably maximized.
 4. Start this application.
 5. Set `Window` to part of the HikmicroAnalyzer title, for example `Hikmicro`.
-6. Set `Tesseract` to `tesseract.exe` or the full path to `tesseract.exe`.
+6. Set `Tesseract` to one of these:
+   - keep the default `offline-deps\tesseract\tesseract.exe` if a full portable Tesseract folder is bundled with the release,
+   - or set the full installed path such as `C:\Program Files\Tesseract-OCR\tesseract.exe`.
 7. Keep `Dry run relay` checked.
 8. Click `Save Settings`.
 9. Click `Select ROI`.
@@ -184,7 +206,7 @@ Recommended commissioning sequence:
 1. Keep `Dry run relay` checked and verify OCR only.
 2. Connect the USB relay to the PC, but do not connect it to the G2000 yet.
 3. Find the COM port in Windows Device Manager.
-4. Fill in `COM Port`, `Baud`, `Stop HEX`, and `Reset HEX`.
+4. Fill in `COM Port`, `Baud`, `Stop command`, and `Reset command`.
 5. Keep the relay contact unconnected from the G2000.
 6. Uncheck `Dry run relay`.
 7. Click `Test Relay Stop`.
@@ -194,10 +216,12 @@ Recommended commissioning sequence:
 11. Test G2000 response in a low-risk state before running plasma.
 12. Only then use the relay for real over-temperature trips.
 
-Contact choice:
+Verified contact choice for the current branch:
 
-- If the G2000 interlock must be closed to permit operation, the usual choice is `COM` + `NC`, so a relay trip opens the circuit.
-- If the lab wiring or relay logic is opposite, use `COM` + `NO` or swap the relay state assigned to `Stop HEX` and `Reset HEX`.
+- The tested path uses `COM1` + `NO1`.
+- Wire `G2000 I1 -> COM1` and `G2000 I2 -> NO1`.
+- `AT+CH1=1` closes `COM1-NO1` and restores the interlock path.
+- `AT+CH1=0` opens `COM1-NO1` and trips the interlock path.
 - Always verify with a multimeter. Do not rely only on relay LEDs.
 
 ## COM Port Setup
@@ -216,30 +240,30 @@ Baud rate:
 - Check the relay board manual first.
 - Common values are `9600` and `115200`.
 - The app `Baud` value must match the relay board.
-- If `Test Relay Stop` does nothing, try the documented baud rate before changing HEX commands.
+- If `Test Relay Stop` does nothing, try the documented baud rate before changing relay commands.
 
-HEX commands:
+Relay commands:
 
-- `Stop HEX` is sent when over-temperature trip occurs.
-- `Reset HEX` is sent when the operator clicks `Reset` or when auto reset succeeds.
+- `Stop command` is sent when over-temperature trip occurs.
+- `Reset command` is sent when the operator clicks `Reset`, when `Test Relay Restore` is used, or when auto reset succeeds.
 - These commands belong to the external USB relay board, not to the G2000 itself.
-- The app leaves both commands empty by default because the correct bytes depend on the actual external relay model.
-- Example only: common LCUS-1 / LCUS-2 / LC Technology USB serial relay boards with a CH340 USB-to-serial chip often use 9600 baud, `A0 01 01 A2` for channel 1 ON, and `A0 01 00 A1` for channel 1 OFF.
-- Accepted formats:
+- In the current `relay-interlock-test` branch, the tested relay is `DSD TECH SH-UR04A`.
+- Default serial settings:
+  - `COM Port = COM3` during the original validation
+  - `Baud = 9600`
+  - `Data bits = 8`
+  - `Parity = None`
+  - `Stop bits = 1`
+- Default commands for this relay:
 
 ```text
-A0 01 01 A2
-A0-01-01-A2
-A0:01:01:A2
+Stop command  = AT+CH1=0
+Reset command = AT+CH1=1
 ```
 
+- The configuration keys in `appsettings.json` are still named `StopCommandHex` and `ResetCommandHex` for backward compatibility, but in this branch they now store ASCII AT commands rather than hexadecimal bytes.
+
 If no external relay board has been selected yet, keep `Dry run relay` checked and do not connect the app output to the G2000.
-
-Optional LCUS/CH340 channel 1 wiring, only if that exact external relay board is used:
-
-- If the G2000 interlock must be opened to stop high voltage and you wire through `COM` + `NC`, `Stop HEX = A0 01 01 A2` energizes the relay and opens the NC contact.
-- `Reset HEX = A0 01 00 A1` releases the relay and closes `COM` + `NC` again.
-- If the lab chooses `COM` + `NO` instead, verify with a multimeter; the stop/reset logic may need to be swapped.
 
 G2000 computer control:
 
@@ -250,7 +274,7 @@ G2000 computer control:
 Dry Run behavior:
 
 - Checked: the app simulates relay actions and does not open the COM port.
-- Unchecked: the app opens the COM port and sends the configured HEX bytes.
+- Unchecked: the app opens the COM port and sends the configured relay commands.
 
 ## Normal Lab Operation Checklist
 
@@ -339,7 +363,7 @@ Use `Export CSV` to copy the current CSV to a selected location.
 - Confirm the USB relay driver is installed.
 - Close serial terminal tools that may occupy the port.
 - Confirm `Baud` matches the relay board.
-- Confirm `Stop HEX` is not empty and matches the relay protocol.
+- Confirm `Stop command` is not empty and matches the relay protocol, for example `AT+CH1=0` for the tested DSD board.
 
 ### COM port access denied
 
@@ -368,7 +392,7 @@ Use `Export CSV` to copy the current CSV to a selected location.
 - The contact may be wired opposite to the required logic.
 - The relay initial state may be wrong.
 - Try the other contact pair, `COM-NO` or `COM-NC`, after confirming with the manual.
-- Check whether `Stop HEX` and `Reset HEX` are swapped for the relay board.
+- Check whether `Stop command` and `Reset command` are swapped for the relay board.
 - Use a multimeter to confirm that reset returns the interlock loop to the allowed state.
 
 ### Over-temperature trip cannot reset
@@ -387,13 +411,13 @@ Important fields:
 - `PollIntervalMs`: default `1000`.
 - `WindowTitleContains`: finds HikmicroAnalyzer by title.
 - `Roi`: saved after `Select ROI`.
-- `Ocr.TesseractExePath`: `tesseract.exe` or full path.
+- `Ocr.TesseractExePath`: `offline-deps\tesseract\tesseract.exe`, `tesseract.exe`, or a full installed path. The app also checks common Windows Tesseract install locations such as `C:\Program Files\Tesseract-OCR\tesseract.exe`.
 - `Ocr.Language`: default `eng`.
 - `Relay.DryRun`: default `true`.
 - `Relay.PortName`: default `COM3`.
 - `Relay.BaudRate`: default `9600`.
-- `Relay.StopCommandHex`: empty by default; fill from the external relay manual.
-- `Relay.ResetCommandHex`: empty by default; fill from the external relay manual.
+- `Relay.StopCommandHex`: in this branch stores the stop relay command text. Default: `AT+CH1=0`.
+- `Relay.ResetCommandHex`: in this branch stores the reset relay command text. Default: `AT+CH1=1`.
 - `DataDirectory`: default `data`.
 - `Language`: `en`, `zh-CN`, or `de`.
 - `AutoResetEnabled`: default `true`.
@@ -406,8 +430,4 @@ Important fields:
 dotnet test .\src\ReactorSoftInterlock.sln
 ```
 
-Expected current result:
-
-```text
-Passed: 20, Failed: 0, Skipped: 0
-```
+Expected result: all tests should pass.

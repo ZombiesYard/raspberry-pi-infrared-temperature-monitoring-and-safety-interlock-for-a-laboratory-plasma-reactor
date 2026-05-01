@@ -4,11 +4,17 @@ Offline package contents
 1. Install the CP210x driver from:
    offline-deps\cp210x-driver\silabser.inf
 
-2. Put a full offline Tesseract folder in:
-   offline-deps\tesseract\
+2. For Tesseract, use one of these methods:
+   - Copy a full runnable Tesseract folder to:
+     offline-deps\tesseract\
+     so that this file exists:
+     offline-deps\tesseract\tesseract.exe
+   - Or install Tesseract to a normal Windows folder such as:
+     C:\Program Files\Tesseract-OCR\tesseract.exe
 
-   The final executable path must be:
-   offline-deps\tesseract\tesseract.exe
+   Do not run the Tesseract installer directly into the artifacts release
+   folder. Install to a normal Windows folder first, or copy an already
+   installed portable folder afterward.
 
 3. Run:
    ReactorSoftInterlock.Wpf.exe

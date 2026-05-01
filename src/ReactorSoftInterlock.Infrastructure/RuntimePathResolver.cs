@@ -9,6 +9,56 @@ public static class RuntimePathResolver
             return configuredPath;
         }
 
+        return GetCandidatePaths(configuredPath).FirstOrDefault(File.Exists) ?? GetDefaultResolvedPath(configuredPath);
+    }
+
+    public static bool ExecutableExists(string configuredPath)
+    {
+        if (string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return false;
+        }
+
+        return GetCandidatePaths(configuredPath).Any(File.Exists);
+    }
+
+    private static IEnumerable<string> GetCandidatePaths(string configuredPath)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                seen.Add(path);
+            }
+        }
+
+        Add(GetDefaultResolvedPath(configuredPath));
+
+        var fileName = Path.GetFileName(configuredPath);
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            foreach (var path in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                         .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                Add(Path.Combine(path, fileName));
+            }
+        }
+
+        if (IsTesseractExecutable(configuredPath))
+        {
+            foreach (var candidate in GetCommonTesseractLocations())
+            {
+                Add(candidate);
+            }
+        }
+
+        return seen;
+    }
+
+    private static string GetDefaultResolvedPath(string configuredPath)
+    {
         if (Path.IsPathFullyQualified(configuredPath))
         {
             return configuredPath;
@@ -23,26 +73,27 @@ public static class RuntimePathResolver
         return File.Exists(bundled) ? bundled : configuredPath;
     }
 
-    public static bool ExecutableExists(string configuredPath)
+    private static bool IsTesseractExecutable(string configuredPath)
     {
-        if (string.IsNullOrWhiteSpace(configuredPath))
-        {
-            return false;
-        }
+        return string.Equals(Path.GetFileName(configuredPath), "tesseract.exe", StringComparison.OrdinalIgnoreCase);
+    }
 
-        var resolved = ResolveExecutablePath(configuredPath);
-        if (File.Exists(resolved))
+    private static IEnumerable<string> GetCommonTesseractLocations()
+    {
+        foreach (var baseDirectory in new[]
+                 {
+                     Environment.GetEnvironmentVariable("ProgramFiles"),
+                     Environment.GetEnvironmentVariable("ProgramFiles(x86)"),
+                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs"),
+                     @"C:\Tools"
+                 })
         {
-            return true;
-        }
+            if (string.IsNullOrWhiteSpace(baseDirectory))
+            {
+                continue;
+            }
 
-        if (resolved != configuredPath)
-        {
-            return false;
+            yield return Path.Combine(baseDirectory, "Tesseract-OCR", "tesseract.exe");
         }
-
-        var paths = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return paths.Any(path => File.Exists(Path.Combine(path, configuredPath)));
     }
 }

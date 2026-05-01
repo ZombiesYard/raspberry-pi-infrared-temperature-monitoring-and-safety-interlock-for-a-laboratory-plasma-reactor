@@ -58,7 +58,7 @@ Important fields:
 3. Set the window title filter, Tesseract path, relay settings, and threshold.
 4. Click `Select ROI` and drag over the maximum temperature text.
 5. Keep relay in dry-run mode and click `Start`.
-6. Once OCR is stable, configure the real COM port and HEX commands.
+6. Once OCR is stable, configure the real COM port and relay commands.
 7. Click `Test Relay Stop`.
 8. Disable dry-run only after the relay contact has been verified.
 

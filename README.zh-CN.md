@@ -14,10 +14,30 @@
 
 - HIKMICRO 红外相机和 HikmicroAnalyzer：显示实时热图和准确温度叠加文字。
 - 本 WPF 软件：截图温度文字区域，OCR 识别温度，判断是否超温。
-- USB 串口继电器：接收 Windows 电脑发出的 HEX 命令。
+- USB 串口继电器：接收 Windows 电脑发出的串口继电器命令。在当前 `relay-interlock-test` 分支里，已经实测的继电器是 `DSD TECH SH-UR04A`，协议是 ASCII AT 命令。
 - G2000 外部 interlock / Not-Aus 回路：继电器触点作为无源干接点接入该回路。
 
 本软件不调用 HIKMICRO 相机 API，因为当前相机工作流中温度信息已经显示在 HikmicroAnalyzer 画面上。
+
+## 当前已验证分支
+
+当前 `relay-interlock-test` 分支已经对齐到实验室里实际测过的继电器：
+
+- 继电器板：`DSD TECH SH-UR04A 4CH`
+- USB 芯片 / 驱动：`Silicon Labs CP210x`
+- 实测串口：`COM3`
+- 协议：`9600 8N1` 上的 ASCII AT 命令
+- 已验证的通道 1 行为：
+  - `AT+CH1=1` -> CH1 打开 -> `COM1-NO1` 闭合
+  - `AT+CH1=0` -> CH1 关闭 -> `COM1-NC1` 闭合
+- 已验证的 G2000 interlock 接线：
+  - `G2000 I1 -> COM1`
+  - `G2000 I2 -> NO1`
+
+因此本分支默认就是：
+
+- `停止命令 = AT+CH1=0`
+- `复位命令 = AT+CH1=1`
 
 ## 软件如何工作
 
@@ -70,7 +90,7 @@
 实验室电脑安装步骤：
 
 1. 安装 HikmicroAnalyzer，并确认相机画面和最高温叠加文字都能显示。
-2. 安装 Windows 版 Tesseract OCR。安装后，可以把 Tesseract 安装目录加入 `PATH`，也可以在软件的 `Tesseract` 字段中填写 `tesseract.exe` 的完整路径。
+2. 安装 Windows 版 Tesseract OCR。实验室原型可以使用 UB Mannheim 这样的社区 Windows 安装包。请安装到正常 Windows 目录，例如 `C:\Program Files\Tesseract-OCR`。不要把安装器直接指向 `artifacts\...` 发布目录。
 3. 安装 USB 串口继电器驱动。常见继电器板可能使用 CH340、CH341、CP210x 或 FTDI 驱动，按继电器板型号选择。
 4. 打开 Windows 设备管理器，展开 `Ports (COM & LPT)`，插入继电器，记录出现的 `COMx`。
 5. 在 OCR 和继电器空载测试完成前，保持 `Dry run relay` 勾选。
@@ -146,7 +166,7 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 2. 双击运行 `ReactorSoftInterlock.Wpf.exe`。
 3. 如果 Windows SmartScreen 弹出提示，先确认文件来自本项目，再继续运行。
 4. 保持 `appsettings.json` 和 exe 在同一目录；点击保存设置时软件会更新这个文件。
-5. 如果软件提示缺少 Tesseract、ROI、HikmicroAnalyzer、COM 口或 HEX 命令，先按提示修好，再开始监控。
+5. 如果软件提示缺少 Tesseract、ROI、HikmicroAnalyzer、COM 口或继电器命令，先按提示修好，再开始监控。
 
 ## 第一次软件配置
 
@@ -155,7 +175,9 @@ dotnet run -c Release --project .\src\ReactorSoftInterlock.Wpf\ReactorSoftInterl
 3. 保持 HikmicroAnalyzer 可见，建议最大化。
 4. 启动本软件。
 5. `Window` 填 HikmicroAnalyzer 窗口标题的一部分，例如 `Hikmicro`。
-6. `Tesseract` 填 `tesseract.exe` 或完整路径。
+6. `Tesseract` 可以这样填写：
+   - 如果发布包里自带完整可运行文件夹，就保持默认 `offline-deps\tesseract\tesseract.exe`
+   - 如果单独安装到了系统里，就填完整路径，例如 `C:\Program Files\Tesseract-OCR\tesseract.exe`
 7. 保持 `Dry run relay` 勾选。
 8. 点击 `Save Settings`。
 9. 点击 `Select ROI`。
@@ -184,7 +206,7 @@ ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最�
 1. 勾选 `Dry run relay`，只验证 OCR。
 2. 把 USB 继电器接到电脑，但先不要接 G2000。
 3. 在 Windows Device Manager 中找到 COM 口。
-4. 填写 `COM Port`、`Baud`、`Stop HEX`、`Reset HEX`。
+4. 填写 `COM Port`、`Baud`、`停止命令`、`复位命令`。
 5. 继电器触点仍保持不接 G2000。
 6. 取消勾选 `Dry run relay`。
 7. 点击 `Test Relay Stop`。
@@ -194,10 +216,12 @@ ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最�
 11. 在不启用 plasma 或低风险状态下测试 G2000 对继电器动作的响应。
 12. 确认无误后，才用于真实超温停机。
 
-触点选择：
+当前分支已验证的触点方案：
 
-- 如果 G2000 interlock 需要“闭合才允许运行”，通常使用 `COM` + `NC`，报警时继电器动作打开回路。
-- 如果实验室接线或继电器逻辑相反，改用 `COM` + `NO`，或交换 `Stop HEX` 与 `Reset HEX` 对应的继电器状态。
+- 已验证路径使用 `COM1` + `NO1`
+- 接线：`G2000 I1 -> COM1`，`G2000 I2 -> NO1`
+- `AT+CH1=1` 会闭合 `COM1-NO1`，恢复 interlock
+- `AT+CH1=0` 会打开 `COM1-NO1`，触发 interlock
 - 必须用万用表确认，不要只看继电器 LED。
 
 ## COM 口设置
@@ -216,30 +240,30 @@ ROI 和窗口位置、大小、显示缩放有关。如果移动、缩放、最�
 - 先看继电器板说明书。
 - 常见值是 `9600` 或 `115200`。
 - 软件中的 `Baud` 必须和继电器板一致。
-- 如果 `Test Relay Stop` 没反应，先检查波特率，再改 HEX。
+- 如果 `Test Relay Stop` 没反应，先检查波特率，再检查继电器命令。
 
-HEX 命令：
+继电器命令：
 
-- `Stop HEX` 是超温 trip 时发送的命令。
-- `Reset HEX` 是人工 reset 或自动复位成功时发送的命令。
+- `停止命令` 会在超温 trip 时发送。
+- `复位命令` 会在人工点击 `Reset`、点击 `测试继电器恢复`，或者自动复位成功时发送。
 - 这些命令属于外部 USB 继电器板，不属于 G2000 本体。
-- 软件默认保持两条命令为空，因为正确字节取决于实际外部继电器型号。
-- 仅作为例子：常见 LCUS-1 / LCUS-2 / LC Technology / CH340 USB 串口继电器板通常使用 9600 波特率，`A0 01 01 A2` 表示通道 1 ON / 吸合，`A0 01 00 A1` 表示通道 1 OFF / 释放。
-- 支持以下格式：
+- 当前 `relay-interlock-test` 分支里，已测试的继电器是 `DSD TECH SH-UR04A`。
+- 当前默认串口参数：
+  - `COM Port = COM3`（当时实测值，换电脑后可能不同）
+  - `Baud = 9600`
+  - `Data bits = 8`
+  - `Parity = None`
+  - `Stop bits = 1`
+- 当前默认命令：
 
 ```text
-A0 01 01 A2
-A0-01-01-A2
-A0:01:01:A2
+停止命令 = AT+CH1=0
+复位命令 = AT+CH1=1
 ```
 
+- `appsettings.json` 里的配置键仍然叫 `StopCommandHex` / `ResetCommandHex`，这是为了兼容旧配置；但在当前分支里，里面存的已经不是 HEX 字节，而是 ASCII AT 命令。
+
 如果还没有确定外部继电器板型号，保持 `Dry run relay` 勾选，不要把软件输出接到 G2000。
-
-可选 LCUS/CH340 通道 1 接法，仅当实际使用这种外部继电器板时适用：
-
-- 如果 G2000 interlock 需要“开路来停止高压”，并且使用 `COM` + `NC`，`Stop HEX = A0 01 01 A2` 会让继电器吸合，从而打开 NC 触点。
-- `Reset HEX = A0 01 00 A1` 会释放继电器，让 `COM` + `NC` 重新闭合。
-- 如果实验室决定使用 `COM` + `NO`，必须用万用表确认；stop/reset 逻辑可能需要互换。
 
 G2000 电脑控制：
 
@@ -250,7 +274,7 @@ G2000 电脑控制：
 Dry Run 含义：
 
 - 勾选：软件只模拟继电器动作，不打开 COM 口。
-- 取消勾选：软件会真实打开 COM 口并发送 HEX 字节。
+- 取消勾选：软件会真实打开 COM 口并发送配置好的继电器命令。
 
 ## 实验前检查清单
 
@@ -337,7 +361,7 @@ timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot
 - 确认 USB 继电器驱动已安装。
 - 关闭占用串口的软件。
 - 确认 `Baud` 与继电器板一致。
-- 确认 `Stop HEX` 非空且符合继电器协议。
+- 确认 `停止命令` 非空并且符合继电器协议，例如当前 DSD 板使用 `AT+CH1=0`。
 
 ### COM port access denied
 
@@ -366,7 +390,7 @@ timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot
 - 触点可能接反。
 - 继电器初始状态可能不对。
 - 在手册确认后尝试换用 `COM-NO` 或 `COM-NC`。
-- 检查该继电器板是否需要交换 `Stop HEX` 和 `Reset HEX` 的状态定义。
+- 检查该继电器板是否需要交换 `停止命令` 和 `复位命令` 的状态定义。
 - 用万用表确认 reset 后 interlock 回路处于允许状态。
 
 ### 超温后无法 Reset
@@ -385,13 +409,13 @@ timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot
 - `PollIntervalMs`：默认 `1000`。
 - `WindowTitleContains`：用于查找 HikmicroAnalyzer。
 - `Roi`：`Select ROI` 后保存。
-- `Ocr.TesseractExePath`：`tesseract.exe` 或完整路径。
+- `Ocr.TesseractExePath`：可以是 `offline-deps\tesseract\tesseract.exe`、`tesseract.exe`，或完整安装路径。程序也会额外检查常见 Windows Tesseract 安装位置，例如 `C:\Program Files\Tesseract-OCR\tesseract.exe`。
 - `Ocr.Language`：默认 `eng`。
 - `Relay.DryRun`：默认 `true`。
 - `Relay.PortName`：默认 `COM3`。
 - `Relay.BaudRate`：默认 `9600`。
-- `Relay.StopCommandHex`：默认空；按外部继电器说明书填写。
-- `Relay.ResetCommandHex`：默认空；按外部继电器说明书填写。
+- `Relay.StopCommandHex`：当前分支里用于保存停止命令文本，默认是 `AT+CH1=0`。
+- `Relay.ResetCommandHex`：当前分支里用于保存复位命令文本，默认是 `AT+CH1=1`。
 - `DataDirectory`：默认 `data`。
 - `Language`：`en`、`zh-CN` 或 `de`。
 - `AutoResetEnabled`：默认 `true`。
@@ -404,8 +428,4 @@ timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot
 dotnet test .\src\ReactorSoftInterlock.sln
 ```
 
-当前预期：
-
-```text
-Passed: 20, Failed: 0, Skipped: 0
-```
+预期结果：所有测试通过。
