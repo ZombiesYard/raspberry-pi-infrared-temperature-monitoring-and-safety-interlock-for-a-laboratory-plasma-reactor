@@ -9,6 +9,8 @@
 ## 目标
 
 - 确认软件断开继电器后，G2000 是否真的禁止 HV / 停止 plasma。
+- 如果启用了 AMC2100，也要确认 Trip 时软件会把气体设定流量写成 `0`。
+- 如果启用了 AMC2100，RS485 联调时优先看软件顶部的 `气体流量` 卡片，不要只盯 AMC2100 本地面板。
 - 确认软件重新闭合继电器后，G2000 的恢复行为。
 - 确认是一条支路够用、一组 interlock 够用，还是四条支路都要一起接管。
 
@@ -126,6 +128,7 @@ Restore = close all enabled channels
 - 触发你以后准备正式使用的动作：
   - 推荐最终测试：`Disconnect All Interlocks`
   - 也可以先做单通道或单组测试
+  - 如果启用了 AMC2100，也要同时确认气体设定值被写成 `0`
 
 立刻观察：
 
@@ -191,4 +194,5 @@ HV resumes automatically: __
 Manual ON required: __
 Manual reset required: __
 Power-cycle required: __
+AMC2100 gas restored: __
 ```

@@ -20,7 +20,15 @@ Offline package contents
    ReactorSoftInterlock.Wpf.exe
 
 4. For the current relay-interlock-test branch:
-   - COM Port default: COM3
-   - Stop command default: AT+CH1=0
-   - Reset command default: AT+CH1=1
-   - Verified G2000 test wiring: I1 -> COM1, I2 -> NO1
+   - Relay COM Port default: COM3
+   - Relay command defaults:
+     AT+CH1=0 / AT+CH2=0 / AT+CH3=0 / AT+CH4=0
+     AT+CH1=1 / AT+CH2=1 / AT+CH3=1 / AT+CH4=1
+   - Recommended G2000 relay mapping:
+     CH1 -> I1-I2
+     CH2 -> I5-I6
+     CH3 -> I3-I4
+     CH4 -> I7-I8
+   - AMC2100 defaults:
+     COM4 / 19200 / slave 1 / digital mode forced
+   - The top dashboard shows live AMC2100 actual flow when AMC2100 is enabled and Dry Run is off.

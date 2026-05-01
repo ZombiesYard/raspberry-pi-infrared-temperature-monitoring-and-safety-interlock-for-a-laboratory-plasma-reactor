@@ -9,6 +9,8 @@ Use it when the DSD TECH relay already works and you want to validate the real G
 ## Purpose
 
 - Confirm that software-controlled relay opening really disables G2000 HV / plasma.
+- If AMC2100 is enabled, confirm that trip also writes the gas setpoint to `0`.
+- If AMC2100 is enabled, use the top `Gas Flow` card in the app as the primary live indicator during RS485 tests.
 - Confirm what happens after software-controlled relay closing.
 - Confirm whether one branch is enough, one interlock group is enough, or all four branches are required.
 
@@ -126,6 +128,7 @@ Only do this after the static tests are understood and the lab agrees.
 - Trigger the action you plan to use in real monitoring:
   - preferred final test: `Disconnect All Interlocks`
   - optional earlier test: one channel or one group only
+  - if AMC2100 is enabled, also confirm that the gas setpoint is written to `0`
 
 Observe immediately:
 
@@ -191,4 +194,5 @@ HV resumes automatically: __
 Manual ON required: __
 Manual reset required: __
 Power-cycle required: __
+AMC2100 gas restored: __
 ```

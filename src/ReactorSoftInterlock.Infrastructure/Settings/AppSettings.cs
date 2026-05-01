@@ -22,5 +22,7 @@ public sealed class AppSettings
 
     public RelaySettings Relay { get; set; } = new();
 
+    public Amc2100Settings Amc2100 { get; set; } = new();
+
     public string DataDirectory { get; set; } = "data";
 }

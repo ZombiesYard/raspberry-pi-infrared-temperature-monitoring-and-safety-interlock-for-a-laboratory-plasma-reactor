@@ -43,6 +43,32 @@
 - Trip 动作：断开所有启用通道
 - Restore 动作：闭合所有启用通道
 
+本分支现在也开始集成 `AMC2100` 气体质量流量控制器：
+
+- 接口：`RS485 Modbus RTU`
+- DB9 关键引脚：
+  - Pin 3 = `RS485B`
+  - Pin 4 = `RS485A`
+  - Pin 5 = `+24V`
+  - Pin 6 = `GND`
+- 默认从站地址：`1`
+- 默认波特率：`19200`
+- 关键寄存器：
+  - `0-1` = 瞬时流量，`32-bit float`
+  - `2-3` = 设置流量，`32-bit float`
+  - `11` = 控制模式，`1` 为数字控制，`2` 为模拟电压控制
+
+当前软件里的 AMC2100 控制逻辑是：
+
+- Trip 时先把 AMC2100 设置流量写成 `0`
+- 然后再断开 G2000 interlock
+- Reset / Auto reset 时先恢复 interlock，再把 AMC2100 恢复到先前缓存的设定流量，或恢复到预设的 fallback 流量
+- 主界面顶部还会通过 RS485 实时显示 AMC2100 的 `气体流量`
+
+注意：这表示**软件可以实现 AMC2100 的启停气路**，但不代表 AMC2100 有单独的“硬复位寄存器”。目前根据说明书截图，我们实现的是“写 0 停气、写回设定值恢复流量”，不是对设备做一次电源级重启。
+
+台架测试时，AMC2100 本地面板可能持续显示 `0`，或者不会在软件写入后立刻刷新设定值显示。这更像设备本地界面的交互设计，不应单独据此判断 RS485 控制失败。当前分支请优先参考软件顶部的 `气体流量` 卡片。
+
 如果你要按照软件控制继电器的方式做现场验证，请直接使用这份 Engineering 实操 checklist：
 
 - [docs/Engineering-Checklist.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.md)

@@ -5,12 +5,14 @@ using System.IO.Ports;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using ReactorSoftInterlock.Application;
 using ReactorSoftInterlock.Application.Ports;
 using ReactorSoftInterlock.Domain;
 using ReactorSoftInterlock.Infrastructure;
 using ReactorSoftInterlock.Infrastructure.Capture;
+using ReactorSoftInterlock.Infrastructure.Gas;
 using ReactorSoftInterlock.Infrastructure.Logging;
 using ReactorSoftInterlock.Infrastructure.Ocr;
 using ReactorSoftInterlock.Infrastructure.Relay;
@@ -32,15 +34,20 @@ public partial class MainWindow : Window
     private InterlockStateMachine _stateMachine = null!;
     private MonitoringService? _monitoringService;
     private CancellationTokenSource? _monitoringCts;
+    private readonly DispatcherTimer _gasFlowTimer = new();
     private double? _lastTemperatureC;
+    private double? _lastGasFlowMlMin;
     private MonitorStatus _currentStatus = MonitorStatus.Idle;
     private bool _isBindingSettings;
+    private bool _isRefreshingGasFlow;
 
     public MainWindow()
     {
         InitializeComponent();
         HistoryGrid.ItemsSource = _history;
         InitializeChannelUi();
+        _gasFlowTimer.Interval = TimeSpan.FromSeconds(1);
+        _gasFlowTimer.Tick += GasFlowTimer_Tick;
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
     }
@@ -61,14 +68,22 @@ public partial class MainWindow : Window
         BuildServices();
         SetAllChannelStates(null);
         SetCurrentMode(T("mode.monitoring"));
+        UpdateGasFlowDisplay();
+        _gasFlowTimer.Start();
         await LoadRecentHistoryAsync();
         DrawTemperatureChart();
     }
 
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
+        _gasFlowTimer.Stop();
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
+    }
+
+    private async void GasFlowTimer_Tick(object? sender, EventArgs e)
+    {
+        await RefreshGasFlowAsync();
     }
 
     private void InitializeChannelUi()
@@ -150,7 +165,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var relayAction = await CreateRelayBank().ResetAsync(CancellationToken.None);
+            var relayAction = await CreateProcessOutputController().ResetAsync(CancellationToken.None);
             _stateMachine.Reset(_lastTemperatureC);
             SetStatus(MonitorStatus.Monitoring);
             SetAllChannelStates(true);
@@ -348,9 +363,52 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void StopGasButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await SaveSettingsFromUiAsync();
+            if (!ValidateAmc2100Setup())
+            {
+                return;
+            }
+
+            await CreateGasFlowController().StopFlowAsync(CancellationToken.None);
+            await RefreshGasFlowAsync(force: true);
+            SetCurrentMode(T("mode.engineering"));
+            FooterText.Text = T("footer.gasStopped");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private async void RestoreGasButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await SaveSettingsFromUiAsync();
+            if (!ValidateAmc2100Setup())
+            {
+                return;
+            }
+
+            await CreateGasFlowController().RestoreFlowAsync(CancellationToken.None);
+            await RefreshGasFlowAsync(force: true);
+            SetCurrentMode(T("mode.engineering"));
+            FooterText.Text = T("footer.gasRestored");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
     private void BuildServices()
     {
         _settings.Relay.Normalize();
+        _settings.Amc2100.Normalize();
         var dataDirectory = Path.IsPathRooted(_settings.DataDirectory)
             ? _settings.DataDirectory
             : Path.Combine(AppContext.BaseDirectory, _settings.DataDirectory);
@@ -359,8 +417,9 @@ public partial class MainWindow : Window
         _stateMachine = new InterlockStateMachine(new InterlockSettings(_settings.ThresholdC));
         var reader = new TesseractCliTemperatureReader(new WindowCapture(), new TemperatureTextParser(), _settings);
         var autoReset = new AutoResetOptions(_settings.AutoResetEnabled, _settings.RecoveryThresholdC, _settings.RecoveryStableSeconds);
-        _monitoringService = new MonitoringService(reader, CreateRelayBank(), _sampleLog, new SystemClock(), _stateMachine, autoReset);
+        _monitoringService = new MonitoringService(reader, CreateProcessOutputController(), _sampleLog, new SystemClock(), _stateMachine, autoReset);
         _monitoringService.SampleRecorded += MonitoringService_SampleRecorded;
+        UpdateGasFlowDisplay();
     }
 
     private IRelayBankController CreateRelayBank()
@@ -368,6 +427,18 @@ public partial class MainWindow : Window
         return _settings.Relay.DryRun
             ? new DryRunRelayController()
             : new SerialRelayController(_settings.Relay);
+    }
+
+    private IGasFlowController CreateGasFlowController()
+    {
+        return _settings.Relay.DryRun || !_settings.Amc2100.Enabled
+            ? new NoOpGasFlowController()
+            : new Amc2100GasFlowController(_settings.Amc2100);
+    }
+
+    private IRelayBankController CreateProcessOutputController()
+    {
+        return new ProcessOutputController(CreateRelayBank(), CreateGasFlowController());
     }
 
     private async Task RunMonitoringLoopAsync(CancellationToken cancellationToken)
@@ -414,7 +485,32 @@ public partial class MainWindow : Window
             return false;
         }
 
-        return ValidateRelaySetup(requireRestore: true);
+        return ValidateRelaySetup(requireRestore: true) && ValidateAmc2100Setup();
+    }
+
+    private bool ValidateAmc2100Setup()
+    {
+        _settings.Amc2100.Normalize();
+
+        if (_settings.Relay.DryRun || !_settings.Amc2100.Enabled)
+        {
+            return true;
+        }
+
+        var availablePorts = SerialPort.GetPortNames();
+        if (!availablePorts.Contains(_settings.Amc2100.PortName, StringComparer.OrdinalIgnoreCase))
+        {
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.amcComMissing"), _settings.Amc2100.PortName));
+            return false;
+        }
+
+        if (_settings.Amc2100.SlaveAddress is < 1 or > 247)
+        {
+            ShowSetupWarning(T("message.amcSlaveInvalid"));
+            return false;
+        }
+
+        return true;
     }
 
     private bool ValidateRelaySetup(bool requireRestore, int? specificChannelNumber = null)
@@ -537,6 +633,7 @@ public partial class MainWindow : Window
         }
 
         DrawTemperatureChart();
+        await RefreshGasFlowAsync(force: true);
     }
 
     private void StopMonitoring(string message)
@@ -561,6 +658,12 @@ public partial class MainWindow : Window
         PortBox.Text = _settings.Relay.PortName;
         DryRunBox.IsChecked = _settings.Relay.DryRun;
         AutoResetBox.IsChecked = _settings.AutoResetEnabled;
+        AmcEnabledBox.IsChecked = _settings.Amc2100.Enabled;
+        AmcPortBox.Text = _settings.Amc2100.PortName;
+        AmcBaudBox.Text = _settings.Amc2100.BaudRate.ToString(CultureInfo.InvariantCulture);
+        AmcSlaveBox.Text = _settings.Amc2100.SlaveAddress.ToString(CultureInfo.InvariantCulture);
+        AmcFallbackBox.Text = _settings.Amc2100.FallbackRestoreSetpointMlMin.ToString("0.0", CultureInfo.InvariantCulture);
+        AmcForceDigitalModeBox.IsChecked = _settings.Amc2100.ForceDigitalControlMode;
         _isBindingSettings = false;
     }
 
@@ -576,8 +679,16 @@ public partial class MainWindow : Window
         _settings.Ocr.TesseractExePath = TesseractPathBox.Text.Trim();
         _settings.Relay.PortName = PortBox.Text.Trim();
         _settings.Relay.DryRun = DryRunBox.IsChecked == true;
+        _settings.Amc2100.Enabled = AmcEnabledBox.IsChecked == true;
+        _settings.Amc2100.PortName = AmcPortBox.Text.Trim();
+        _settings.Amc2100.BaudRate = ParseInt(AmcBaudBox.Text, nameof(_settings.Amc2100.BaudRate));
+        _settings.Amc2100.SlaveAddress = ParseInt(AmcSlaveBox.Text, nameof(_settings.Amc2100.SlaveAddress));
+        _settings.Amc2100.FallbackRestoreSetpointMlMin = ParseDouble(AmcFallbackBox.Text, nameof(_settings.Amc2100.FallbackRestoreSetpointMlMin));
+        _settings.Amc2100.ForceDigitalControlMode = AmcForceDigitalModeBox.IsChecked == true;
         _settings.Relay.Normalize();
+        _settings.Amc2100.Normalize();
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        UpdateGasFlowDisplay();
     }
 
     private async void LanguageBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -615,6 +726,8 @@ public partial class MainWindow : Window
         StatusLabel.Text = T("label.status");
         TemperatureCardLabel.Text = T("group.temperature");
         RelaySummaryLabel.Text = T("label.relayBank");
+        GasFlowCardLabel.Text = T("label.gasFlow");
+        GasFlowHintText.Text = T("gasFlow.hint");
         CurrentModeLabel.Text = T("label.currentMode");
         EngineeringHintText.Text = T("engineering.hint");
         MonitorTab.Header = T("tab.monitor");
@@ -649,12 +762,21 @@ public partial class MainWindow : Window
         LanguageQuickLabel.Text = T("label.language");
         DryRunBox.Content = T("check.dryRun");
         AutoResetBox.Content = T("check.autoReset");
+        AmcSectionTitle.Text = T("group.amc2100");
+        AmcEnabledBox.Content = T("check.amcEnabled");
+        AmcPortLabel.Text = T("label.amcCom");
+        AmcBaudLabel.Text = T("label.amcBaud");
+        AmcSlaveLabel.Text = T("label.amcSlave");
+        AmcFallbackLabel.Text = T("label.amcRestoreSetpoint");
+        AmcForceDigitalModeBox.Content = T("check.amcDigitalMode");
         TimeColumn.Header = T("grid.time");
         TemperatureColumn.Header = T("grid.temp");
         StatusColumn.Header = T("grid.status");
         RelayColumn.Header = T("grid.relay");
         ReasonColumn.Header = T("grid.reason");
         RoiColumn.Header = T("grid.roi");
+        StopGasButton.Content = T("button.stopGas");
+        RestoreGasButton.Content = T("button.restoreGas");
         ApplyChannelLabels();
         SetStatus(_currentStatus);
 
@@ -665,6 +787,7 @@ public partial class MainWindow : Window
 
         DrawTemperatureChart();
         UpdateRelayBankStatus();
+        UpdateGasFlowDisplay();
     }
 
     private void ApplyChannelLabels()
@@ -750,6 +873,80 @@ public partial class MainWindow : Window
                 TemperatureText.Foreground = new SolidColorBrush(Color.FromRgb(15, 23, 42));
                 break;
         }
+    }
+
+    private async Task RefreshGasFlowAsync(bool force = false)
+    {
+        if (_isRefreshingGasFlow || _settings is null)
+        {
+            return;
+        }
+
+        if (_settings.Relay.DryRun || !_settings.Amc2100.Enabled)
+        {
+            _lastGasFlowMlMin = null;
+            UpdateGasFlowDisplay();
+            return;
+        }
+
+        if (!force && !ValidateAmcPortExistsSilently())
+        {
+            _lastGasFlowMlMin = null;
+            UpdateGasFlowDisplay();
+            return;
+        }
+
+        _isRefreshingGasFlow = true;
+        try
+        {
+            _lastGasFlowMlMin = await CreateGasFlowController().ReadActualFlowAsync(CancellationToken.None);
+        }
+        catch
+        {
+            _lastGasFlowMlMin = null;
+        }
+        finally
+        {
+            _isRefreshingGasFlow = false;
+            UpdateGasFlowDisplay();
+        }
+    }
+
+    private bool ValidateAmcPortExistsSilently()
+    {
+        var portName = _settings.Amc2100.PortName?.Trim();
+        if (string.IsNullOrWhiteSpace(portName))
+        {
+            return false;
+        }
+
+        return SerialPort.GetPortNames().Contains(portName, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void UpdateGasFlowDisplay()
+    {
+        if (_settings is null)
+        {
+            GasFlowText.Text = "--";
+            return;
+        }
+
+        if (_settings.Relay.DryRun || !_settings.Amc2100.Enabled)
+        {
+            GasFlowText.Text = T("gasFlow.disabled");
+            GasFlowText.FontSize = 24;
+            return;
+        }
+
+        if (_lastGasFlowMlMin is null)
+        {
+            GasFlowText.Text = T("gasFlow.unavailable");
+            GasFlowText.FontSize = 24;
+            return;
+        }
+
+        GasFlowText.Text = $"{_lastGasFlowMlMin.Value:0.0} {T("gasFlow.unit")}";
+        GasFlowText.FontSize = 26;
     }
 
     private void SetCurrentMode(string text)

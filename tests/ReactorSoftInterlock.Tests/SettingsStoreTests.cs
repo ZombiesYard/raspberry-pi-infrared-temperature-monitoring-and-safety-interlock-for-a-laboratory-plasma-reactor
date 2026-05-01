@@ -36,6 +36,9 @@ public sealed class SettingsStoreTests
             Assert.Equal("AT+CH4=1", settings.Relay.Channels[3].CloseCommand);
             Assert.Contains("AT+CH4=0", settings.Relay.StopCommandHex);
             Assert.Contains("AT+CH4=1", settings.Relay.ResetCommandHex);
+            Assert.Equal("COM4", settings.Amc2100.PortName);
+            Assert.Equal(19200, settings.Amc2100.BaudRate);
+            Assert.Equal(1, settings.Amc2100.SlaveAddress);
         }
         finally
         {

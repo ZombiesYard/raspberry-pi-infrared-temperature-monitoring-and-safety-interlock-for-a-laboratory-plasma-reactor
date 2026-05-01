@@ -43,6 +43,32 @@ This branch now defaults to a four-channel engineering relay bank:
 - Trip action: open all enabled channels
 - Restore action: close all enabled channels
 
+This branch is also being extended for `AMC2100` gas mass flow control:
+
+- Interface: `RS485 Modbus RTU`
+- Relevant DB9 pins:
+  - Pin 3 = `RS485B`
+  - Pin 4 = `RS485A`
+  - Pin 5 = `+24V`
+  - Pin 6 = `GND`
+- Default slave address: `1`
+- Default baud rate: `19200`
+- Relevant registers:
+  - `0-1` = actual flow, `32-bit float`
+  - `2-3` = set flow, `32-bit float`
+  - `11` = control mode, `1` = digital control, `2` = analog voltage control
+
+The current software-side AMC2100 logic is:
+
+- On trip, write the AMC2100 set-flow register to `0`
+- Then open the G2000 interlock channels
+- On reset / auto reset, close the interlock channels first, then restore the AMC2100 set flow from the cached previous setpoint or from a configured fallback setpoint
+- The top dashboard also shows a live `Gas Flow` readout from the AMC2100 actual-flow registers over RS485
+
+This means the software can implement AMC2100 gas start/stop in software. It does not mean the device has a separate documented hard-reset register. In the current prototype, "software reset" for AMC2100 means "write 0 to stop gas, then write back the desired setpoint to resume flow."
+
+In bench testing, the AMC2100 local panel may continue to show `0` or may not visibly refresh the setpoint unless you navigate on the device itself. For RS485 validation in this branch, use the software `Gas Flow` card as the primary live indicator.
+
 For a practical software-driven validation flow, use the engineering checklist:
 
 - [docs/Engineering-Checklist.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.md)

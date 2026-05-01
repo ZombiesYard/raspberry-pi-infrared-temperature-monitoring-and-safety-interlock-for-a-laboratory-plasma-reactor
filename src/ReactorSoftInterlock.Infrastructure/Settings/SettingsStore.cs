@@ -18,6 +18,7 @@ public sealed class SettingsStore
         {
             var defaults = new AppSettings();
             defaults.Relay.Normalize();
+            defaults.Amc2100.Normalize();
             await SaveAsync(defaults, cancellationToken).ConfigureAwait(false);
             return defaults;
         }
@@ -26,12 +27,14 @@ public sealed class SettingsStore
         var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, JsonOptions, cancellationToken).ConfigureAwait(false)
             ?? new AppSettings();
         settings.Relay.Normalize();
+        settings.Amc2100.Normalize();
         return settings;
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken)
     {
         settings.Relay.Normalize();
+        settings.Amc2100.Normalize();
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrWhiteSpace(directory))
         {

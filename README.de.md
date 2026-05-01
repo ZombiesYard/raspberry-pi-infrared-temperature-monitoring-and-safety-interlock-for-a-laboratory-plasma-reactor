@@ -43,6 +43,32 @@ Deshalb verwendet dieser Branch jetzt standardmaessig eine Engineering-Relaisban
 - Trip-Aktion: alle aktivierten Kanaele oeffnen
 - Restore-Aktion: alle aktivierten Kanaele schliessen
 
+Dieser Branch wird jetzt auch fuer den `AMC2100` Gas-Massendurchflussregler erweitert:
+
+- Schnittstelle: `RS485 Modbus RTU`
+- Relevante DB9-Pins:
+  - Pin 3 = `RS485B`
+  - Pin 4 = `RS485A`
+  - Pin 5 = `+24V`
+  - Pin 6 = `GND`
+- Standard-Slave-Adresse: `1`
+- Standard-Baudrate: `19200`
+- Wichtige Register:
+  - `0-1` = Ist-Durchfluss, `32-bit float`
+  - `2-3` = Soll-Durchfluss, `32-bit float`
+  - `11` = Steuermodus, `1` = digitale Steuerung, `2` = analoge Spannungsteuerung
+
+Die aktuelle AMC2100-Logik in der Software ist:
+
+- Beim Trip wird der AMC2100-Sollwert auf `0` gesetzt
+- Danach werden die G2000-Interlock-Kanaele geoeffnet
+- Bei Reset / Auto Reset werden zuerst die Interlock-Kanaele wieder geschlossen und danach der AMC2100-Sollwert auf den zuvor zwischengespeicherten oder einen konfigurierten Fallback-Wert gesetzt
+- Im Hauptfenster wird zusaetzlich ein Live-Wert `Gasfluss` aus den AMC2100-Istwert-Registern ueber RS485 angezeigt
+
+Damit kann die Software den AMC2100-Gasfluss softwareseitig stoppen und wieder freigeben. Das bedeutet aber nicht, dass im Handbuch bereits ein eigener Hard-Reset-Registerzugriff dokumentiert ist. In diesem Prototyp bedeutet "Software-Reset" fuer den AMC2100: Sollwert auf `0` schreiben, spaeter Sollwert wiederherstellen.
+
+Beim Banktest kann das lokale AMC2100-Display weiterhin `0` zeigen oder den Sollwert nicht sofort sichtbar aktualisieren, solange nicht lokal am Geraet navigiert wird. Fuer die RS485-Inbetriebnahme in diesem Branch ist deshalb die Live-Anzeige `Gasfluss` im Software-Dashboard die wichtigere Referenz.
+
 Fuer einen praktischen softwaregesteuerten Validierungsablauf direkt auf der Engineering-Seite diese Checkliste verwenden:
 
 - [docs/Engineering-Checklist.md](/mnt/l/Documents/files/Yu%20Zhang%20TU%20Clausthal/ProjectShukang/raspberry-pi-based-infrared-temperature-monitoring-and-safety-interlock-for-a-laboratory-plasma-reactor/docs/Engineering-Checklist.md)
