@@ -117,12 +117,19 @@ public partial class AdvancedSettingsWindow : Window
     {
         return new RelaySettings
         {
+            Mode = source.Mode,
             DryRun = source.DryRun,
             PortName = source.PortName,
             BaudRate = source.BaudRate,
             StopCommandHex = source.StopCommandHex,
             ResetCommandHex = source.ResetCommandHex,
             OpenOnAlarm = source.OpenOnAlarm,
+            G2000Can = new G2000CanSettings
+            {
+                Channel = source.G2000Can.Channel,
+                NodeId = source.G2000Can.NodeId,
+                CommandPeriodMs = source.G2000Can.CommandPeriodMs
+            },
             Channels = source.Channels.Select(Clone).ToList()
         };
     }

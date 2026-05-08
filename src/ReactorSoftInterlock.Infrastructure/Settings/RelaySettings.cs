@@ -2,6 +2,8 @@ namespace ReactorSoftInterlock.Infrastructure.Settings;
 
 public sealed class RelaySettings
 {
+    public string Mode { get; set; } = string.Empty;
+
     public bool DryRun { get; set; } = true;
 
     public string PortName { get; set; } = "COM3";
@@ -13,6 +15,8 @@ public sealed class RelaySettings
     public string ResetCommandHex { get; set; } = string.Empty;
 
     public bool OpenOnAlarm { get; set; } = true;
+
+    public G2000CanSettings G2000Can { get; set; } = new();
 
     public List<RelayChannelSettings> Channels { get; set; } = CreateDefaultChannels();
 
@@ -42,6 +46,16 @@ public sealed class RelaySettings
 
         StopCommandHex = RelayBankCommandFactory.BuildTripAllCommandText(this);
         ResetCommandHex = RelayBankCommandFactory.BuildRestoreAllCommandText(this);
+    }
+
+    public RelayControllerMode ResolveMode()
+    {
+        if (Enum.TryParse<RelayControllerMode>(Mode, ignoreCase: true, out var configuredMode))
+        {
+            return configuredMode;
+        }
+
+        return DryRun ? RelayControllerMode.DryRun : RelayControllerMode.Serial;
     }
 
     private static List<RelayChannelSettings> CreateDefaultChannels()

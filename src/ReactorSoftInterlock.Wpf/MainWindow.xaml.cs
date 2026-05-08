@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private CsvSampleLog _sampleLog = null!;
     private InterlockStateMachine _stateMachine = null!;
     private MonitoringService? _monitoringService;
+    private IRelayBankController? _relayBankController;
     private CancellationTokenSource? _monitoringCts;
     private readonly DispatcherTimer _gasFlowTimer = new();
     private double? _lastTemperatureC;
@@ -89,6 +90,7 @@ public partial class MainWindow : Window
         _gasFlowTimer.Stop();
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
+        (_relayBankController as IDisposable)?.Dispose();
     }
 
     private async void GasFlowTimer_Tick(object? sender, EventArgs e)
@@ -124,7 +126,10 @@ public partial class MainWindow : Window
             _settings.Roi.Height = (int)Math.Max(1, selected.Height);
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
             FooterText.Text = $"{T("footer.roiSaved")}: {_settings.Roi}";
-            BuildServices();
+            if (_monitoringCts is null)
+            {
+                BuildServices();
+            }
         }
         catch (Exception ex)
         {
@@ -198,7 +203,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await CreateRelayBank().OpenAllInterlocksAsync(CancellationToken.None);
+            await _relayBankController!.OpenAllInterlocksAsync(CancellationToken.None);
             SetAllChannelStates(false);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = T("footer.allDisconnected");
@@ -219,7 +224,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await CreateRelayBank().CloseAllInterlocksAsync(CancellationToken.None);
+            await _relayBankController!.CloseAllInterlocksAsync(CancellationToken.None);
             SetAllChannelStates(true);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = T("footer.allConnected");
@@ -255,7 +260,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await CreateRelayBank().SetChannelClosedAsync(channelNumber, closed, CancellationToken.None);
+            await _relayBankController!.SetChannelClosedAsync(channelNumber, closed, CancellationToken.None);
             SetChannelState(channelNumber, closed);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = string.Format(CultureInfo.InvariantCulture, footerTemplate, channelNumber);
@@ -361,7 +366,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await CreateRelayBank().CloseAllInterlocksAsync(CancellationToken.None);
+            await _relayBankController!.CloseAllInterlocksAsync(CancellationToken.None);
             SetAllChannelStates(true);
             SetCurrentMode(T("mode.monitoring"));
             MainTabControl.SelectedItem = MonitorTab;
@@ -420,6 +425,12 @@ public partial class MainWindow : Window
 
     private void BuildServices()
     {
+        if (_monitoringService is not null)
+        {
+            _monitoringService.SampleRecorded -= MonitoringService_SampleRecorded;
+        }
+
+        (_relayBankController as IDisposable)?.Dispose();
         _settings.Relay.Normalize();
         _settings.Amc2100.Normalize();
         var dataDirectory = Path.IsPathRooted(_settings.DataDirectory)
@@ -430,6 +441,7 @@ public partial class MainWindow : Window
         _stateMachine = new InterlockStateMachine(new InterlockSettings(_settings.ThresholdC));
         var reader = new TesseractCliTemperatureReader(new WindowCapture(), new TemperatureTextParser(), _settings);
         var autoReset = new AutoResetOptions(_settings.AutoResetEnabled, _settings.RecoveryThresholdC, _settings.RecoveryStableSeconds);
+        _relayBankController = CreateRelayBank();
         _monitoringService = new MonitoringService(reader, CreateProcessOutputController(), _sampleLog, new SystemClock(), _stateMachine, autoReset);
         _monitoringService.SampleRecorded += MonitoringService_SampleRecorded;
         UpdateGasFlowDisplay();
@@ -437,9 +449,13 @@ public partial class MainWindow : Window
 
     private IRelayBankController CreateRelayBank()
     {
-        return _settings.Relay.DryRun
-            ? new DryRunRelayController()
-            : new SerialRelayController(_settings.Relay);
+        return _settings.Relay.ResolveMode() switch
+        {
+            RelayControllerMode.DryRun => new DryRunRelayController(),
+            RelayControllerMode.Serial => new SerialRelayController(_settings.Relay),
+            RelayControllerMode.G2000Can => new G2000CanController(_settings.Relay.G2000Can),
+            _ => throw new InvalidOperationException($"Unsupported relay controller mode '{_settings.Relay.Mode}'.")
+        };
     }
 
     private IGasFlowController CreateGasFlowController()
@@ -451,7 +467,7 @@ public partial class MainWindow : Window
 
     private IRelayBankController CreateProcessOutputController()
     {
-        return new ProcessOutputController(CreateRelayBank());
+        return new ProcessOutputController(_relayBankController!);
     }
 
     private async Task RunMonitoringLoopAsync(CancellationToken cancellationToken)
@@ -530,11 +546,17 @@ public partial class MainWindow : Window
     {
         _settings.Relay.Normalize();
 
-        if (_settings.Relay.DryRun)
+        return _settings.Relay.ResolveMode() switch
         {
-            return true;
-        }
+            RelayControllerMode.DryRun => true,
+            RelayControllerMode.Serial => ValidateSerialRelaySetup(requireRestore, specificChannelNumber),
+            RelayControllerMode.G2000Can => ValidateG2000CanSetup(),
+            _ => false
+        };
+    }
 
+    private bool ValidateSerialRelaySetup(bool requireRestore, int? specificChannelNumber)
+    {
         var availablePorts = SerialPort.GetPortNames();
         if (!availablePorts.Contains(_settings.Relay.PortName, StringComparer.OrdinalIgnoreCase))
         {
@@ -564,6 +586,29 @@ public partial class MainWindow : Window
             {
                 return false;
             }
+        }
+
+        return true;
+    }
+
+    private bool ValidateG2000CanSetup()
+    {
+        if (!PcanChannelParser.TryParse(_settings.Relay.G2000Can.Channel, out _))
+        {
+            ShowSetupWarning("G2000 CAN channel must look like UsbBus1, UsbBus2, or PCAN_USBBUS1.");
+            return false;
+        }
+
+        if (_settings.Relay.G2000Can.NodeId > 0x7E)
+        {
+            ShowSetupWarning("G2000 CAN node ID must be in the range 0x00..0x7E.");
+            return false;
+        }
+
+        if (_settings.Relay.G2000Can.CommandPeriodMs <= 0)
+        {
+            ShowSetupWarning("G2000 CAN command period must be a positive number of milliseconds.");
+            return false;
         }
 
         return true;
