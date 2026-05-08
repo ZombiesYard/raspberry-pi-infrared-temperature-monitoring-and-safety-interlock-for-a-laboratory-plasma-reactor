@@ -54,24 +54,34 @@ public partial class MainWindow : Window
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        _settingsStore = new SettingsStore(_settingsPath);
-        _settings = await _settingsStore.LoadAsync(CancellationToken.None);
-        LanguageBox.ItemsSource = new[]
+        try
         {
-            new LanguageOption("en", "English"),
-            new LanguageOption("zh-CN", "中文"),
-            new LanguageOption("de", "Deutsch")
-        };
+            _settingsStore = new SettingsStore(_settingsPath);
+            _settings = await _settingsStore.LoadAsync(CancellationToken.None);
+            LanguageBox.ItemsSource = new[]
+            {
+                new LanguageOption("en", "English"),
+                new LanguageOption("zh-CN", "中文"),
+                new LanguageOption("de", "Deutsch")
+            };
 
-        BindSettingsToUi();
-        ApplyLanguage();
-        BuildServices();
-        SetAllChannelStates(null);
-        SetCurrentMode(T("mode.monitoring"));
-        UpdateGasFlowDisplay();
-        _gasFlowTimer.Start();
-        await LoadRecentHistoryAsync();
-        DrawTemperatureChart();
+            BindSettingsToUi();
+            ApplyLanguage();
+            BuildServices();
+            SetAllChannelStates(null);
+            SetCurrentMode(T("mode.monitoring"));
+            UpdateGasFlowDisplay();
+            _gasFlowTimer.Start();
+            await LoadRecentHistoryAsync();
+            DrawTemperatureChart();
+            Activate();
+        }
+        catch (Exception ex)
+        {
+            FooterText.Text = ex.Message;
+            MessageBox.Show(this, ex.ToString(), "ReactorSoftInterlock startup", MessageBoxButton.OK, MessageBoxImage.Error);
+            Close();
+        }
     }
 
     private void MainWindow_Closed(object? sender, EventArgs e)
@@ -701,9 +711,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        _settings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? "en");
-        ApplyLanguage();
-        await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        try
+        {
+            _settings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? "en");
+            ApplyLanguage();
+            await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
     }
 
     private void TemperatureChartCanvas_SizeChanged(object sender, SizeChangedEventArgs e)

@@ -6,6 +6,7 @@
         Height="900"
         MinWidth="1180"
         MinHeight="760"
+        WindowStartupLocation="CenterScreen"
         Background="#EEF2F7">
   <Window.Resources>
     <Style x:Key="CardBorderStyle" TargetType="Border">
