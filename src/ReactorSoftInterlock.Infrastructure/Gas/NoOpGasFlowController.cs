@@ -14,6 +14,11 @@ public sealed class NoOpGasFlowController : IGasFlowController
         return Task.CompletedTask;
     }
 
+    public Task SetTargetFlowAsync(double targetFlowMlMin, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     public Task<double?> ReadActualFlowAsync(CancellationToken cancellationToken)
     {
         return Task.FromResult<double?>(null);

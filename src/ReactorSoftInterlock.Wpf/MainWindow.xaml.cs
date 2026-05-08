@@ -294,7 +294,7 @@ public partial class MainWindow : Window
         try
         {
             await SaveSettingsFromUiAsync();
-            BuildServices();
+            await RebuildOrRestartMonitoringAsync();
             FooterText.Text = $"{T("footer.settingsSaved")}: {_settingsPath}";
         }
         catch (Exception ex)
@@ -320,7 +320,7 @@ public partial class MainWindow : Window
 
             _settings.Relay = window.ResultSettings;
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
-            BuildServices();
+            await RebuildOrRestartMonitoringAsync();
             BindSettingsToUi();
             ApplyLanguage();
             FooterText.Text = T("footer.advancedSaved");
@@ -394,10 +394,13 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await CreateGasFlowController().RestoreFlowAsync(CancellationToken.None);
+            await CreateGasFlowController().SetTargetFlowAsync(_settings.Amc2100.FallbackRestoreSetpointMlMin, CancellationToken.None);
             await RefreshGasFlowAsync(force: true);
             SetCurrentMode(T("mode.engineering"));
-            FooterText.Text = T("footer.gasRestored");
+            FooterText.Text = string.Format(
+                CultureInfo.InvariantCulture,
+                T("footer.gasSetpointApplied"),
+                _settings.Amc2100.FallbackRestoreSetpointMlMin.ToString("0.0", CultureInfo.InvariantCulture));
         }
         catch (Exception ex)
         {
@@ -431,14 +434,14 @@ public partial class MainWindow : Window
 
     private IGasFlowController CreateGasFlowController()
     {
-        return _settings.Relay.DryRun || !_settings.Amc2100.Enabled
+        return !_settings.Amc2100.Enabled
             ? new NoOpGasFlowController()
             : new Amc2100GasFlowController(_settings.Amc2100);
     }
 
     private IRelayBankController CreateProcessOutputController()
     {
-        return new ProcessOutputController(CreateRelayBank(), CreateGasFlowController());
+        return new ProcessOutputController(CreateRelayBank());
     }
 
     private async Task RunMonitoringLoopAsync(CancellationToken cancellationToken)
@@ -485,14 +488,14 @@ public partial class MainWindow : Window
             return false;
         }
 
-        return ValidateRelaySetup(requireRestore: true) && ValidateAmc2100Setup();
+        return ValidateRelaySetup(requireRestore: true);
     }
 
     private bool ValidateAmc2100Setup()
     {
         _settings.Amc2100.Normalize();
 
-        if (_settings.Relay.DryRun || !_settings.Amc2100.Enabled)
+        if (!_settings.Amc2100.Enabled)
         {
             return true;
         }
@@ -882,7 +885,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_settings.Relay.DryRun || !_settings.Amc2100.Enabled)
+        if (!_settings.Amc2100.Enabled)
         {
             _lastGasFlowMlMin = null;
             UpdateGasFlowDisplay();
@@ -931,7 +934,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_settings.Relay.DryRun || !_settings.Amc2100.Enabled)
+        if (!_settings.Amc2100.Enabled)
         {
             GasFlowText.Text = T("gasFlow.disabled");
             GasFlowText.FontSize = 24;
@@ -952,6 +955,30 @@ public partial class MainWindow : Window
     private void SetCurrentMode(string text)
     {
         CurrentModeText.Text = text;
+    }
+
+    private async Task RebuildOrRestartMonitoringAsync()
+    {
+        if (_monitoringCts is null)
+        {
+            BuildServices();
+            return;
+        }
+
+        if (!ValidateMonitoringSetup())
+        {
+            return;
+        }
+
+        _monitoringCts.Cancel();
+        _monitoringCts.Dispose();
+        _monitoringCts = new CancellationTokenSource();
+        BuildServices();
+        SetStatus(MonitorStatus.Monitoring);
+        SetCurrentMode(T("mode.monitoring"));
+        FooterText.Text = T("footer.monitoringRestarted");
+        _ = Task.Run(() => RunMonitoringLoopAsync(_monitoringCts.Token));
+        await RefreshGasFlowAsync(force: true);
     }
 
     private void DrawTemperatureChart()

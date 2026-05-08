@@ -7,25 +7,25 @@ namespace ReactorSoftInterlock.Tests;
 public sealed class ProcessOutputControllerTests
 {
     [Fact]
-    public async Task StopAsyncStopsGasBeforeOpeningInterlocks()
+    public async Task StopAsyncDelegatesToRelayBank()
     {
         var events = new List<string>();
-        var controller = new ProcessOutputController(new RecordingRelayBank(events), new RecordingGasController(events));
+        var controller = new ProcessOutputController(new RecordingRelayBank(events));
 
         await controller.StopAsync(CancellationToken.None);
 
-        Assert.Equal(["gas-stop", "relay-stop"], events);
+        Assert.Equal(["relay-stop"], events);
     }
 
     [Fact]
-    public async Task ResetAsyncClosesInterlocksBeforeRestoringGas()
+    public async Task ResetAsyncDelegatesToRelayBank()
     {
         var events = new List<string>();
-        var controller = new ProcessOutputController(new RecordingRelayBank(events), new RecordingGasController(events));
+        var controller = new ProcessOutputController(new RecordingRelayBank(events));
 
         await controller.ResetAsync(CancellationToken.None);
 
-        Assert.Equal(["relay-reset", "gas-restore"], events);
+        Assert.Equal(["relay-reset"], events);
     }
 
     private sealed class RecordingRelayBank(List<string> events) : IRelayBankController
@@ -51,25 +51,5 @@ public sealed class ProcessOutputControllerTests
         public Task OpenAllInterlocksAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task CloseAllInterlocksAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SetChannelClosedAsync(int channelNumber, bool closed, CancellationToken cancellationToken) => Task.CompletedTask;
-    }
-
-    private sealed class RecordingGasController(List<string> events) : IGasFlowController
-    {
-        public Task StopFlowAsync(CancellationToken cancellationToken)
-        {
-            events.Add("gas-stop");
-            return Task.CompletedTask;
-        }
-
-        public Task RestoreFlowAsync(CancellationToken cancellationToken)
-        {
-            events.Add("gas-restore");
-            return Task.CompletedTask;
-        }
-
-        public Task<double?> ReadActualFlowAsync(CancellationToken cancellationToken)
-        {
-            return Task.FromResult<double?>(123.4);
-        }
     }
 }

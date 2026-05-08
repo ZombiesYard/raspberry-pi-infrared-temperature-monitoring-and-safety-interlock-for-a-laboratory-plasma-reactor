@@ -6,5 +6,7 @@ public interface IGasFlowController
 
     Task RestoreFlowAsync(CancellationToken cancellationToken);
 
+    Task SetTargetFlowAsync(double targetFlowMlMin, CancellationToken cancellationToken);
+
     Task<double?> ReadActualFlowAsync(CancellationToken cancellationToken);
 }

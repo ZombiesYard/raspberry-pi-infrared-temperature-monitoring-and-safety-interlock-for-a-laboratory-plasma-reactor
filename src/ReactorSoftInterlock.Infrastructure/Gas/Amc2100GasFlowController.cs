@@ -59,6 +59,27 @@ public sealed class Amc2100GasFlowController : IGasFlowController
         }
     }
 
+    public Task SetTargetFlowAsync(double targetFlowMlMin, CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            var normalizedTarget = Math.Max(0d, targetFlowMlMin);
+            using var port = OpenPort();
+            if (_settings.ForceDigitalControlMode)
+            {
+                EnsureDigitalMode(port);
+            }
+
+            WriteFloatRegisterPair(port, (ushort)_settings.SetpointHighRegister, (float)normalizedTarget);
+            if (normalizedTarget > 0)
+            {
+                _cachedRestoreSetpointMlMin = normalizedTarget;
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
     public Task<double?> ReadActualFlowAsync(CancellationToken cancellationToken)
     {
         lock (_sync)

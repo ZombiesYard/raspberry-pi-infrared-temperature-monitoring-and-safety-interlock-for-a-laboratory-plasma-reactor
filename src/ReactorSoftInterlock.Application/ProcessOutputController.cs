@@ -6,42 +6,20 @@ namespace ReactorSoftInterlock.Application;
 public sealed class ProcessOutputController : IRelayBankController
 {
     private readonly IRelayBankController _relayBankController;
-    private readonly IGasFlowController _gasFlowController;
 
-    public ProcessOutputController(IRelayBankController relayBankController, IGasFlowController gasFlowController)
+    public ProcessOutputController(IRelayBankController relayBankController)
     {
         _relayBankController = relayBankController;
-        _gasFlowController = gasFlowController;
     }
 
-    public async Task<RelayAction> StopAsync(CancellationToken cancellationToken)
+    public Task<RelayAction> StopAsync(CancellationToken cancellationToken)
     {
-        Exception? gasException = null;
-        try
-        {
-            await _gasFlowController.StopFlowAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            gasException = ex;
-        }
-
-        var relayAction = await _relayBankController.StopAsync(cancellationToken).ConfigureAwait(false);
-        if (gasException is not null)
-        {
-            throw new InvalidOperationException(
-                "Interlocks were opened, but AMC2100 gas stop failed. Check the AMC2100 COM port, RS485 wiring, slave ID, and control mode.",
-                gasException);
-        }
-
-        return relayAction;
+        return _relayBankController.StopAsync(cancellationToken);
     }
 
-    public async Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
+    public Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
     {
-        var relayAction = await _relayBankController.ResetAsync(cancellationToken).ConfigureAwait(false);
-        await _gasFlowController.RestoreFlowAsync(cancellationToken).ConfigureAwait(false);
-        return relayAction;
+        return _relayBankController.ResetAsync(cancellationToken);
     }
 
     public Task<RelayAction> TestStopAsync(CancellationToken cancellationToken)
