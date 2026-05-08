@@ -7,6 +7,7 @@ internal static class PcanBasicNative
     private const string LibraryName = "PCANBasic.dll";
 
     internal const uint PcanErrorOk = 0x00000;
+    internal const uint PcanErrorReceiveQueueEmpty = 0x00020;
     internal const ushort PcanBaud125K = 0x031C;
     internal const byte PcanMessageStandard = 0x00;
 
@@ -19,6 +20,33 @@ internal static class PcanBasicNative
 
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
         internal byte[] DATA;
+
+        internal static TPCANMsg CreateStandard(uint id, byte[] data)
+        {
+            return new TPCANMsg
+            {
+                ID = id,
+                MSGTYPE = PcanMessageStandard,
+                LEN = 8,
+                DATA = data
+            };
+        }
+
+        internal static TPCANMsg CreateEmpty()
+        {
+            return new TPCANMsg
+            {
+                DATA = new byte[8]
+            };
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TPCANTimestamp
+    {
+        internal uint millis;
+        internal ushort millis_overflow;
+        internal ushort micros;
     }
 
     [DllImport(LibraryName, EntryPoint = "CAN_Initialize")]
@@ -29,4 +57,7 @@ internal static class PcanBasicNative
 
     [DllImport(LibraryName, EntryPoint = "CAN_Write")]
     internal static extern uint Write(ushort channel, ref TPCANMsg messageBuffer);
+
+    [DllImport(LibraryName, EntryPoint = "CAN_Read")]
+    internal static extern uint Read(ushort channel, ref TPCANMsg messageBuffer, out TPCANTimestamp timestampBuffer);
 }

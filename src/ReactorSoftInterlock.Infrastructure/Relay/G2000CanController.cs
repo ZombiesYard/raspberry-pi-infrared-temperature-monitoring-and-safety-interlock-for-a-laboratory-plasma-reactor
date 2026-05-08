@@ -1,25 +1,42 @@
+using ReactorSoftInterlock.Application.G2000;
 using ReactorSoftInterlock.Application.Ports;
 using ReactorSoftInterlock.Domain;
 using ReactorSoftInterlock.Infrastructure.Settings;
 
 namespace ReactorSoftInterlock.Infrastructure.Relay;
 
-public sealed class G2000CanController : IRelayBankController, IDisposable
+public sealed class G2000CanController : IG2000Controller
 {
     private readonly G2000CanSettings _settings;
     private readonly ushort _channelHandle;
     private readonly TimeSpan _commandPeriod;
+    private readonly TimeSpan _readPollInterval;
     private readonly object _sync = new();
     private readonly SemaphoreSlim _writeGate = new(1, 1);
-    private CancellationTokenSource? _senderCts;
+    private readonly G2000WritableSetpoints _targetSetpoints;
+    private G2000StartupRecipe _startupRecipe;
+    private readonly G2000TelemetrySnapshot _snapshot = new();
+    private CancellationTokenSource? _loopsCts;
     private Task? _senderTask;
-    private byte[] _currentCommand = G2000CanProtocol.CreateCanBusStopData();
+    private Task? _readerTask;
+    private G2000HvState _targetHvState = G2000HvState.HvAus;
+    private G2000UiMode _uiMode;
+    private TripRecoveryPolicy _recoveryPolicy;
+    private bool _setpointsDirty = true;
     private bool _initialized;
     private bool _disposed;
+    private G2000AutomaticSequenceState? _automaticSequence;
+    private G2000PreTripState? _preTripState;
+    private bool _tripLatched;
+    private string _tripReason = string.Empty;
+    private bool _autoRecoverAfterFaultClear;
+    private string _automaticStageLabel = "Idle";
+    private DateTimeOffset? _pendingHvOnAt;
 
     public G2000CanController(G2000CanSettings settings)
     {
         _settings = settings;
+        _settings.Normalize();
         _channelHandle = PcanChannelParser.ParseOrThrow(settings.Channel);
         if (settings.CommandPeriodMs <= 0)
         {
@@ -32,36 +49,239 @@ public sealed class G2000CanController : IRelayBankController, IDisposable
         }
 
         _commandPeriod = TimeSpan.FromMilliseconds(settings.CommandPeriodMs);
+        _readPollInterval = TimeSpan.FromMilliseconds(settings.ReadPollIntervalMs);
+        _targetSetpoints = settings.WritableSetpoints.Clone();
+        _startupRecipe = settings.StartupRecipe.Clone();
+        _recoveryPolicy = settings.ResolveRecoveryPolicy();
+        _uiMode = settings.ResolveUiMode();
+        UpdateSnapshotLocked();
     }
 
-    public Task<RelayAction> StopAsync(CancellationToken cancellationToken)
+    public event EventHandler<G2000TelemetrySnapshot>? TelemetryUpdated;
+
+    public G2000TelemetrySnapshot Snapshot
     {
-        return SetCommandAsync(G2000CanProtocol.CreateCanBusStopData(), RelayAction.StopSent, cancellationToken);
+        get
+        {
+            lock (_sync)
+            {
+                return _snapshot.Clone();
+            }
+        }
     }
 
-    public Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
+    public G2000WritableSetpoints TargetSetpoints
     {
-        return SetCommandAsync(G2000CanProtocol.CreateCanBusHvReadyData(), RelayAction.ResetSent, cancellationToken);
+        get
+        {
+            lock (_sync)
+            {
+                return _targetSetpoints.Clone();
+            }
+        }
     }
 
-    public Task<RelayAction> TestStopAsync(CancellationToken cancellationToken)
+    public G2000StartupRecipe StartupRecipe
     {
-        return SetCommandAsync(G2000CanProtocol.CreateCanBusStopData(), RelayAction.TestStopSent, cancellationToken);
+        get
+        {
+            lock (_sync)
+            {
+                return _startupRecipe.Clone();
+            }
+        }
     }
 
-    public Task OpenAllInterlocksAsync(CancellationToken cancellationToken)
+    public TripRecoveryPolicy RecoveryPolicy
     {
-        return SetCommandAsync(G2000CanProtocol.CreateCanBusStopData(), RelayAction.StopSent, cancellationToken);
+        get
+        {
+            lock (_sync)
+            {
+                return _recoveryPolicy;
+            }
+        }
+        set
+        {
+            lock (_sync)
+            {
+                _recoveryPolicy = value;
+                UpdateSnapshotLocked();
+            }
+
+            PublishTelemetry();
+        }
     }
 
-    public Task CloseAllInterlocksAsync(CancellationToken cancellationToken)
+    public G2000UiMode UiMode
     {
-        return SetCommandAsync(G2000CanProtocol.CreateCanBusHvReadyData(), RelayAction.ResetSent, cancellationToken);
+        get
+        {
+            lock (_sync)
+            {
+                return _uiMode;
+            }
+        }
+        set
+        {
+            lock (_sync)
+            {
+                _uiMode = value;
+                UpdateSnapshotLocked();
+            }
+
+            PublishTelemetry();
+        }
+    }
+
+    public bool IsTripLatched
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _tripLatched;
+            }
+        }
+    }
+
+    public async Task EnsureConnectedAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        EnsureInitialized();
+        EnsureLoops();
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RelayAction> StopAsync(CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        lock (_sync)
+        {
+            LatchTripLocked("Temperature limit trip", autoRecoverAfterFaultClear: false);
+        }
+
+        await SetHvStateInternalAsync(G2000HvState.HvAus, cancellationToken, switchToManualMode: false, clearTrip: false).ConfigureAwait(false);
+        return RelayAction.StopSent;
+    }
+
+    public async Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        if (IsTripLatched)
+        {
+            await RecoverFromTripAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await SetHvStateInternalAsync(G2000HvState.HvReady, cancellationToken, switchToManualMode: true, clearTrip: true).ConfigureAwait(false);
+        }
+
+        return RelayAction.ResetSent;
+    }
+
+    public async Task<RelayAction> TestStopAsync(CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await SetHvStateInternalAsync(G2000HvState.HvAus, cancellationToken, switchToManualMode: true, clearTrip: true).ConfigureAwait(false);
+        return RelayAction.TestStopSent;
+    }
+
+    public async Task OpenAllInterlocksAsync(CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await SetHvStateInternalAsync(G2000HvState.HvAus, cancellationToken, switchToManualMode: true, clearTrip: true).ConfigureAwait(false);
+    }
+
+    public async Task CloseAllInterlocksAsync(CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await SetHvStateInternalAsync(G2000HvState.HvReady, cancellationToken, switchToManualMode: true, clearTrip: true).ConfigureAwait(false);
     }
 
     public Task SetChannelClosedAsync(int channelNumber, bool closed, CancellationToken cancellationToken)
     {
         throw new NotSupportedException("G2000 CAN mode does not support per-channel relay bank control.");
+    }
+
+    public async Task SetHvStateAsync(G2000HvState state, CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await SetHvStateInternalAsync(state, cancellationToken, switchToManualMode: true, clearTrip: true).ConfigureAwait(false);
+    }
+
+    public async Task ApplyWritableSetpointsAsync(G2000WritableSetpoints setpoints, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(setpoints);
+        _settings.ValidateWritableSetpoints(setpoints);
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+
+        lock (_sync)
+        {
+            _targetSetpoints.VoltageV = setpoints.VoltageV;
+            _targetSetpoints.FrequencyKhz = setpoints.FrequencyKhz;
+            _targetSetpoints.DutyPercent = setpoints.DutyPercent;
+            _targetSetpoints.TonMs = setpoints.TonMs;
+            _targetSetpoints.ToffMs = setpoints.ToffMs;
+            _setpointsDirty = true;
+            UpdateSnapshotLocked();
+        }
+
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+        PublishTelemetry();
+    }
+
+    public async Task StartAutomaticSequenceAsync(G2000StartupRecipe recipe, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recipe);
+        _settings.ValidateStartupRecipe(recipe);
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+
+        lock (_sync)
+        {
+            _startupRecipe = recipe.Clone();
+            _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, DateTimeOffset.Now);
+            _uiMode = G2000UiMode.Automatic;
+            _tripLatched = false;
+            _tripReason = string.Empty;
+            _autoRecoverAfterFaultClear = false;
+            _automaticStageLabel = "Stage1";
+            _targetSetpoints.VoltageV = _startupRecipe.Stage1VoltageV;
+            _setpointsDirty = true;
+            _pendingHvOnAt = null;
+            if (_startupRecipe.EnterHvReadyBeforeRun)
+            {
+                _targetHvState = G2000HvState.HvReady;
+                if (_startupRecipe.EnterHvOnAtStart)
+                {
+                    _pendingHvOnAt = DateTimeOffset.Now.AddMilliseconds(_settings.HvReadyLeadTimeMs);
+                    _automaticStageLabel = "ReadyLead";
+                }
+            }
+            else if (_startupRecipe.EnterHvOnAtStart)
+            {
+                _targetHvState = G2000HvState.HvOn;
+            }
+
+            UpdateSnapshotLocked();
+        }
+
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+        PublishTelemetry();
+    }
+
+    public Task StopAutomaticSequenceAsync(CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            _automaticSequence = null;
+            _uiMode = G2000UiMode.Manual;
+            _automaticStageLabel = "Stopped";
+            UpdateSnapshotLocked();
+        }
+
+        PublishTelemetry();
+        return Task.CompletedTask;
     }
 
     public void Dispose()
@@ -72,100 +292,31 @@ public sealed class G2000CanController : IRelayBankController, IDisposable
         }
 
         _disposed = true;
-        _senderCts?.Cancel();
+        _loopsCts?.Cancel();
         try
         {
-            _senderTask?.Wait(TimeSpan.FromSeconds(1));
+            var tasks = new[] { _senderTask, _readerTask }
+                .Where(static task => task is not null)
+                .Cast<Task>()
+                .ToArray();
+            if (tasks.Length > 0)
+            {
+                Task.WaitAll(tasks, TimeSpan.FromSeconds(1));
+            }
         }
         catch (AggregateException ex) when (ex.InnerExceptions.All(static inner => inner is TaskCanceledException or OperationCanceledException))
         {
-            // Expected when shutting down the keepalive loop.
+            // Expected during shutdown.
         }
         finally
         {
-            _senderCts?.Dispose();
+            _loopsCts?.Dispose();
             _writeGate.Dispose();
         }
 
         if (_initialized)
         {
             PcanBasicNative.Uninitialize(_channelHandle);
-        }
-    }
-
-    private async Task<RelayAction> SetCommandAsync(byte[] command, RelayAction action, CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        EnsureInitialized();
-        EnsureSenderLoop();
-
-        lock (_sync)
-        {
-            _currentCommand = command;
-        }
-
-        await WriteCurrentCommandAsync(cancellationToken).ConfigureAwait(false);
-        return action;
-    }
-
-    private void EnsureSenderLoop()
-    {
-        lock (_sync)
-        {
-            if (_senderTask is not null)
-            {
-                return;
-            }
-
-            _senderCts = new CancellationTokenSource();
-            _senderTask = Task.Run(() => RunSenderLoopAsync(_senderCts.Token));
-        }
-    }
-
-    private async Task RunSenderLoopAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var timer = new PeriodicTimer(_commandPeriod);
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                await WriteCurrentCommandAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Normal shutdown.
-        }
-    }
-
-    private async Task WriteCurrentCommandAsync(CancellationToken cancellationToken)
-    {
-        byte[] command;
-        lock (_sync)
-        {
-            command = (byte[])_currentCommand.Clone();
-        }
-
-        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var message = new PcanBasicNative.TPCANMsg
-            {
-                ID = G2000CanProtocol.GetCommandId(_settings.NodeId),
-                MSGTYPE = PcanBasicNative.PcanMessageStandard,
-                LEN = 8,
-                DATA = command
-            };
-
-            var status = PcanBasicNative.Write(_channelHandle, ref message);
-            if (status != PcanBasicNative.PcanErrorOk)
-            {
-                throw new InvalidOperationException($"PCAN write failed with status 0x{status:X} on channel {_settings.Channel}.");
-            }
-        }
-        finally
-        {
-            _writeGate.Release();
         }
     }
 
@@ -183,5 +334,445 @@ public sealed class G2000CanController : IRelayBankController, IDisposable
         }
 
         _initialized = true;
+        lock (_sync)
+        {
+            _snapshot.Connected = true;
+            UpdateSnapshotLocked();
+        }
+    }
+
+    private void EnsureLoops()
+    {
+        lock (_sync)
+        {
+            if (_loopsCts is not null)
+            {
+                return;
+            }
+
+            _loopsCts = new CancellationTokenSource();
+            _senderTask = Task.Run(() => RunSenderLoopAsync(_loopsCts.Token));
+            _readerTask = Task.Run(() => RunReaderLoopAsync(_loopsCts.Token));
+        }
+    }
+
+    private async Task RunSenderLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(_commandPeriod);
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await MaybeAdvanceAutomaticSequenceAsync(cancellationToken).ConfigureAwait(false);
+                await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+                UpdateCommunicationHealth();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown.
+        }
+    }
+
+    private async Task RunReaderLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(_readPollInterval);
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await DrainReceiveQueueAsync(cancellationToken).ConfigureAwait(false);
+                UpdateCommunicationHealth();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown.
+        }
+    }
+
+    private async Task DrainReceiveQueueAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var message = PcanBasicNative.TPCANMsg.CreateEmpty();
+            var status = PcanBasicNative.Read(_channelHandle, ref message, out _);
+            if (status == PcanBasicNative.PcanErrorReceiveQueueEmpty)
+            {
+                return;
+            }
+
+            if (status != PcanBasicNative.PcanErrorOk)
+            {
+                throw new InvalidOperationException($"PCAN read failed with status 0x{status:X} on channel {_settings.Channel}.");
+            }
+
+            await HandleIncomingMessageAsync(message.ID, message.DATA, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleIncomingMessageAsync(uint id, byte[] data, CancellationToken cancellationToken)
+    {
+        var shouldForceStop = false;
+        var shouldAutoRecover = false;
+        var now = DateTimeOffset.Now;
+        lock (_sync)
+        {
+            _snapshot.LastReceivedAt = now;
+            _snapshot.CommunicationHealthy = true;
+
+            switch (id)
+            {
+                case var statusId when statusId == G2000CanProtocol.GetStatusId(_settings.NodeId):
+                {
+                    var status = G2000CanProtocol.ParseStatusData(data);
+                    _snapshot.Ready = status.Ready;
+                    _snapshot.Fault = status.Fault;
+                    _snapshot.HvEnable = status.HvEnable;
+                    _snapshot.HvOn = status.HvOn;
+                    _snapshot.Source = status.Source;
+                    _snapshot.ErrorCode = status.ErrorCode;
+                    _snapshot.ErrorText = status.ErrorText;
+                    _snapshot.StatusFrameHex = G2000CanProtocol.FormatFrame(data);
+
+                    if (status.Fault &&
+                        status.ErrorCode is G2000CanProtocol.ErrorCodeInterlock or G2000CanProtocol.ErrorCodeExternalCanTimeout &&
+                        !_tripLatched &&
+                        _targetHvState != G2000HvState.HvAus)
+                    {
+                        LatchTripLocked(status.ErrorText, autoRecoverAfterFaultClear: true);
+                        shouldForceStop = true;
+                    }
+                    else if (!status.Fault &&
+                             _tripLatched &&
+                             _autoRecoverAfterFaultClear &&
+                             _recoveryPolicy != TripRecoveryPolicy.HoldHvAus)
+                    {
+                        shouldAutoRecover = true;
+                    }
+
+                    break;
+                }
+                case var dcLinkId when dcLinkId == G2000CanProtocol.GetDcLinkActualId(_settings.NodeId):
+                {
+                    var (voltage, auxiliary) = G2000CanProtocol.ParseTwoFloatFrame(data);
+                    _snapshot.DcLinkVoltageV = voltage;
+                    _snapshot.DcLinkAuxValue = auxiliary;
+                    _snapshot.DcLinkActualFrameHex = G2000CanProtocol.FormatFrame(data);
+                    _snapshot.ActualSetpoints.VoltageV = voltage;
+                    break;
+                }
+                case var inverterId when inverterId == G2000CanProtocol.GetInverterActualId(_settings.NodeId):
+                {
+                    var (frequency, duty) = G2000CanProtocol.ParseTwoFloatFrame(data);
+                    _snapshot.FrequencyKhz = frequency;
+                    _snapshot.DutyPercent = duty;
+                    _snapshot.InverterActualFrameHex = G2000CanProtocol.FormatFrame(data);
+                    _snapshot.ActualSetpoints.FrequencyKhz = frequency;
+                    _snapshot.ActualSetpoints.DutyPercent = duty;
+                    break;
+                }
+                case var reservedId when reservedId == G2000CanProtocol.GetReservedActualId(_settings.NodeId):
+                    _snapshot.ReservedActualFrameHex = G2000CanProtocol.FormatFrame(data);
+                    break;
+                case var pulseId when pulseId == G2000CanProtocol.GetPulseActualId(_settings.NodeId):
+                {
+                    var (ton, toff) = G2000CanProtocol.ParseTwoFloatFrame(data);
+                    _snapshot.TonMs = ton;
+                    _snapshot.ToffMs = toff;
+                    _snapshot.PulseActualFrameHex = G2000CanProtocol.FormatFrame(data);
+                    _snapshot.ActualSetpoints.TonMs = ton;
+                    _snapshot.ActualSetpoints.ToffMs = toff;
+                    break;
+                }
+                default:
+                    break;
+            }
+
+            UpdateSnapshotLocked();
+        }
+
+        PublishTelemetry();
+
+        if (shouldForceStop)
+        {
+            await SetHvStateInternalAsync(G2000HvState.HvAus, cancellationToken, switchToManualMode: false, clearTrip: false).ConfigureAwait(false);
+        }
+        else if (shouldAutoRecover)
+        {
+            await RecoverFromTripAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task MaybeAdvanceAutomaticSequenceAsync(CancellationToken cancellationToken)
+    {
+        var shouldSend = false;
+        lock (_sync)
+        {
+            if (_pendingHvOnAt is not null && DateTimeOffset.Now >= _pendingHvOnAt.Value)
+            {
+                _targetHvState = G2000HvState.HvOn;
+                _pendingHvOnAt = null;
+                if (_uiMode == G2000UiMode.Automatic && _automaticSequence is not null)
+                {
+                    _automaticStageLabel = _automaticSequence.CurrentStage;
+                }
+
+                UpdateSnapshotLocked();
+                shouldSend = true;
+            }
+
+            if (_automaticSequence is null)
+            {
+                if (!shouldSend)
+                {
+                    return;
+                }
+            }
+
+            if (_automaticSequence is not null &&
+                _automaticSequence.TryAdvance(DateTimeOffset.Now, out var nextVoltageV))
+            {
+                _targetSetpoints.VoltageV = nextVoltageV;
+                _setpointsDirty = true;
+                _automaticStageLabel = _automaticSequence.CurrentStage;
+                if (_automaticSequence.IsComplete)
+                {
+                    _automaticSequence.MarkComplete();
+                    _automaticStageLabel = "Stage2";
+                }
+
+                UpdateSnapshotLocked();
+                shouldSend = true;
+            }
+        }
+
+        if (shouldSend)
+        {
+            await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+            PublishTelemetry();
+        }
+    }
+
+    private async Task RecoverFromTripAsync(CancellationToken cancellationToken)
+    {
+        G2000RecoveryDecision decision;
+        lock (_sync)
+        {
+            decision = G2000RecoveryPlanner.Plan(_recoveryPolicy, _preTripState);
+            _tripLatched = false;
+            _tripReason = string.Empty;
+            _autoRecoverAfterFaultClear = false;
+            _automaticSequence = null;
+            _uiMode = decision.UiMode;
+            _targetHvState = decision.HvState;
+            _targetSetpoints.VoltageV = decision.Setpoints.VoltageV;
+            _targetSetpoints.FrequencyKhz = decision.Setpoints.FrequencyKhz;
+            _targetSetpoints.DutyPercent = decision.Setpoints.DutyPercent;
+            _targetSetpoints.TonMs = decision.Setpoints.TonMs;
+            _targetSetpoints.ToffMs = decision.Setpoints.ToffMs;
+            _startupRecipe = decision.Recipe.Clone();
+            _setpointsDirty = true;
+            _automaticStageLabel = decision.AutomaticStage;
+
+            if (decision.ResumeAutomaticSequence)
+            {
+                if (string.Equals(decision.AutomaticStage, "Stage2", StringComparison.OrdinalIgnoreCase))
+                {
+                    _uiMode = G2000UiMode.Automatic;
+                    _targetSetpoints.VoltageV = _startupRecipe.Stage2VoltageV;
+                    _automaticStageLabel = "Stage2";
+                }
+                else
+                {
+                    _uiMode = G2000UiMode.Automatic;
+                    _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, DateTimeOffset.Now);
+                    _targetSetpoints.VoltageV = _startupRecipe.Stage1VoltageV;
+                    _automaticStageLabel = "Stage1";
+                }
+            }
+
+            UpdateSnapshotLocked();
+        }
+
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+        PublishTelemetry();
+    }
+
+    private async Task SetHvStateInternalAsync(G2000HvState state, CancellationToken cancellationToken, bool switchToManualMode, bool clearTrip)
+    {
+        lock (_sync)
+        {
+            _pendingHvOnAt = null;
+            if (state == G2000HvState.HvOn &&
+                !_snapshot.HvEnable &&
+                _settings.HvReadyLeadTimeMs > 0)
+            {
+                _targetHvState = G2000HvState.HvReady;
+                _pendingHvOnAt = DateTimeOffset.Now.AddMilliseconds(_settings.HvReadyLeadTimeMs);
+                _automaticStageLabel = "ReadyLead";
+            }
+            else
+            {
+                _targetHvState = state;
+            }
+
+            _automaticSequence = null;
+            if (_pendingHvOnAt is null)
+            {
+                _automaticStageLabel = "Manual";
+            }
+
+            if (switchToManualMode)
+            {
+                _uiMode = G2000UiMode.Manual;
+            }
+
+            if (clearTrip)
+            {
+                _tripLatched = false;
+                _tripReason = string.Empty;
+                _autoRecoverAfterFaultClear = false;
+            }
+
+            UpdateSnapshotLocked();
+        }
+
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+        PublishTelemetry();
+    }
+
+    private async Task SendCurrentStateAsync(CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            byte[] commandData;
+            byte[]? dcLinkData = null;
+            byte[]? inverterData = null;
+            byte[]? pulseData = null;
+            lock (_sync)
+            {
+                commandData = BuildCommandDataLocked();
+                if (_setpointsDirty)
+                {
+                    dcLinkData = G2000CanProtocol.CreateDcLinkSetpointData(_targetSetpoints.VoltageV);
+                    inverterData = G2000CanProtocol.CreateInverterSetpointData(_targetSetpoints.FrequencyKhz, _targetSetpoints.DutyPercent);
+                    pulseData = G2000CanProtocol.CreatePulseSetpointData(_targetSetpoints.TonMs, _targetSetpoints.ToffMs);
+                    _setpointsDirty = false;
+                }
+            }
+
+            if (dcLinkData is not null)
+            {
+                await WriteFrameAsync(G2000CanProtocol.GetDcLinkSetpointId(_settings.NodeId), dcLinkData, cancellationToken).ConfigureAwait(false);
+                await WriteFrameAsync(G2000CanProtocol.GetInverterSetpointId(_settings.NodeId), inverterData!, cancellationToken).ConfigureAwait(false);
+                await WriteFrameAsync(G2000CanProtocol.GetPulseSetpointId(_settings.NodeId), pulseData!, cancellationToken).ConfigureAwait(false);
+            }
+
+            await WriteFrameAsync(G2000CanProtocol.GetCommandId(_settings.NodeId), commandData, cancellationToken).ConfigureAwait(false);
+
+            lock (_sync)
+            {
+                _snapshot.LastSentAt = DateTimeOffset.Now;
+                UpdateSnapshotLocked();
+            }
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+
+        PublishTelemetry();
+    }
+
+    private Task WriteFrameAsync(uint id, byte[] data, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var message = PcanBasicNative.TPCANMsg.CreateStandard(id, data);
+        var status = PcanBasicNative.Write(_channelHandle, ref message);
+        if (status != PcanBasicNative.PcanErrorOk)
+        {
+            throw new InvalidOperationException($"PCAN write failed with status 0x{status:X} on channel {_settings.Channel}.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private byte[] BuildCommandDataLocked()
+    {
+        return _targetHvState switch
+        {
+            G2000HvState.HvOn => G2000CanProtocol.CreateCanBusHvOnData(),
+            G2000HvState.HvReady => G2000CanProtocol.CreateCanBusHvReadyData(),
+            _ => G2000CanProtocol.CreateCanBusStopData()
+        };
+    }
+
+    private void LatchTripLocked(string reason, bool autoRecoverAfterFaultClear)
+    {
+        if (!_tripLatched)
+        {
+            _preTripState = new G2000PreTripState
+            {
+                HvState = _targetHvState,
+                Setpoints = _targetSetpoints.Clone(),
+                UiMode = _uiMode,
+                AutomaticSequenceActive = _automaticSequence is not null,
+                AutomaticStage = _automaticSequence?.CurrentStage ?? _snapshot.AutomaticStage,
+                Recipe = _startupRecipe.Clone()
+            };
+        }
+
+        _tripLatched = true;
+        _tripReason = reason;
+        _autoRecoverAfterFaultClear = autoRecoverAfterFaultClear;
+        _automaticSequence = null;
+        _uiMode = G2000UiMode.Manual;
+        _targetHvState = G2000HvState.HvAus;
+        _pendingHvOnAt = null;
+        _automaticStageLabel = "Tripped";
+        UpdateSnapshotLocked();
+    }
+
+    private void UpdateCommunicationHealth()
+    {
+        lock (_sync)
+        {
+            _snapshot.CommunicationHealthy = _snapshot.LastReceivedAt is not null &&
+                                             DateTimeOffset.Now - _snapshot.LastReceivedAt.Value <= TimeSpan.FromSeconds(2);
+            UpdateSnapshotLocked();
+        }
+
+        PublishTelemetry();
+    }
+
+    private void UpdateSnapshotLocked()
+    {
+        _snapshot.Connected = _initialized && !_disposed;
+        _snapshot.TargetHvState = _targetHvState;
+        _snapshot.UiMode = _uiMode;
+        _snapshot.AutomaticStage = _automaticSequence?.CurrentStage ?? _automaticStageLabel;
+        _snapshot.TripLatched = _tripLatched;
+        _snapshot.TripReason = _tripReason;
+        _snapshot.TargetSetpoints = _targetSetpoints.Clone();
+    }
+
+    private void PublishTelemetry()
+    {
+        var handler = TelemetryUpdated;
+        if (handler is null)
+        {
+            return;
+        }
+
+        G2000TelemetrySnapshot snapshot;
+        lock (_sync)
+        {
+            snapshot = _snapshot.Clone();
+        }
+
+        handler.Invoke(this, snapshot);
     }
 }

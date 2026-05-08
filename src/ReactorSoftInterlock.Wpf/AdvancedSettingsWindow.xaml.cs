@@ -128,7 +128,12 @@ public partial class AdvancedSettingsWindow : Window
             {
                 Channel = source.G2000Can.Channel,
                 NodeId = source.G2000Can.NodeId,
-                CommandPeriodMs = source.G2000Can.CommandPeriodMs
+                CommandPeriodMs = source.G2000Can.CommandPeriodMs,
+                ReadPollIntervalMs = source.G2000Can.ReadPollIntervalMs,
+                UiMode = source.G2000Can.UiMode,
+                RecoveryPolicy = source.G2000Can.RecoveryPolicy,
+                WritableSetpoints = source.G2000Can.WritableSetpoints.Clone(),
+                StartupRecipe = source.G2000Can.StartupRecipe.Clone()
             },
             Channels = source.Channels.Select(Clone).ToList()
         };

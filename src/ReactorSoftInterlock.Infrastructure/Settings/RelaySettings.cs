@@ -22,6 +22,9 @@ public sealed class RelaySettings
 
     public void Normalize()
     {
+        G2000Can ??= new G2000CanSettings();
+        G2000Can.Normalize();
+
         var existing = (Channels ?? [])
             .Where(static channel => channel.ChannelNumber is >= 1 and <= 4)
             .GroupBy(static channel => channel.ChannelNumber)

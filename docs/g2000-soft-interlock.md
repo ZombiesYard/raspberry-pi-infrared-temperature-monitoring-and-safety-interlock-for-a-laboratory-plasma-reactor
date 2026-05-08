@@ -63,6 +63,15 @@ Verified G2000 CAN command frames with `KNO = 0`:
 - `82 00 03 00 00 00 00 00`: `HV bereit`
 - `83 00 03 00 00 00 00 00`: `HV EIN`
 
+Important manual-backed protocol finding:
+
+- `0x300+n` is the writable setpoint for `Zwischenkreisspannung / V (U2)`, the internal DC-link voltage.
+- It is not the same thing as the external HV output terminal voltage.
+- The manual also states that the value actually achievable by the generator can deviate from the requested setpoint because of internal controller limits.
+- The software now defaults to the manual-backed U2 range of `0 .. 300 V` so the writable range matches the panel.
+- This is still a U2 range, not an external HV output range.
+- Out-of-range writes are blocked unless `Relay.G2000Can.AllowUnsafeU2Writes` is explicitly enabled.
+
 Verified `0x180` status frames:
 
 - `01 00 03 00 00 00 00 00`: ready, CAN source, no fault

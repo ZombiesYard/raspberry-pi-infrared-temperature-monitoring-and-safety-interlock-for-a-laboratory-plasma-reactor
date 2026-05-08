@@ -1,3 +1,4 @@
+using ReactorSoftInterlock.Application.G2000;
 using ReactorSoftInterlock.Infrastructure.Relay;
 using ReactorSoftInterlock.Infrastructure.Settings;
 
@@ -33,7 +34,7 @@ public sealed class G2000CanProtocolTests
         Assert.True(stop.Ready);
         Assert.False(stop.HvEnable);
         Assert.False(stop.HvOn);
-        Assert.Equal(0x03, stop.Source);
+        Assert.Equal(G2000ControlSource.CanBus, stop.Source);
 
         Assert.True(ready.HvEnable);
         Assert.False(ready.HvOn);
@@ -62,5 +63,34 @@ public sealed class G2000CanProtocolTests
     {
         Assert.True(PcanChannelParser.TryParse(channel, out var handle));
         Assert.Equal(expectedHandle, handle);
+    }
+
+    [Fact]
+    public void CreateSetpointFrames_EncodeLittleEndianFloatPairs()
+    {
+        Assert.Equal(
+            new byte[] { 0x00, 0x00, 0x2C, 0x42, 0x00, 0x00, 0x00, 0x00 },
+            G2000CanProtocol.CreateDcLinkSetpointData(43.0));
+        Assert.Equal(
+            new byte[] { 0x00, 0x00, 0xDC, 0x42, 0x00, 0x00, 0x34, 0x42 },
+            G2000CanProtocol.CreateInverterSetpointData(110.0, 45.0));
+        Assert.Equal(
+            new byte[] { 0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x00 },
+            G2000CanProtocol.CreatePulseSetpointData(1.0, 0.0));
+    }
+
+    [Fact]
+    public void ParseTwoFloatFrame_DecodesVerifiedActuals()
+    {
+        var dcLink = G2000CanProtocol.ParseTwoFloatFrame([0x93, 0x3D, 0x8A, 0x3F, 0x00, 0x00, 0x00, 0x00]);
+        var inverter = G2000CanProtocol.ParseTwoFloatFrame([0x51, 0x0B, 0xDC, 0x42, 0x00, 0x00, 0x34, 0x42]);
+        var pulse = G2000CanProtocol.ParseTwoFloatFrame([0x05, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x00]);
+
+        Assert.Equal(1.08, dcLink.First, 2);
+        Assert.Equal(0.0, dcLink.Second, 2);
+        Assert.Equal(110.02, inverter.First, 2);
+        Assert.Equal(45.0, inverter.Second, 2);
+        Assert.Equal(1.0, pulse.First, 2);
+        Assert.Equal(0.0, pulse.Second, 2);
     }
 }
