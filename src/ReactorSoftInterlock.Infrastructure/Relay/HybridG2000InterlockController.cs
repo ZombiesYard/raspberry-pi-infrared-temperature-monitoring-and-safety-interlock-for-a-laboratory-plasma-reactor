@@ -45,13 +45,13 @@ public sealed class HybridG2000InterlockController : IG2000Controller
 
     public async Task<RelayAction> StopAsync(CancellationToken cancellationToken)
     {
-        await _g2000.StopAsync(cancellationToken).ConfigureAwait(false);
         await _physicalInterlock.OpenAllInterlocksAsync(cancellationToken).ConfigureAwait(false);
         return RelayAction.StopSent;
     }
 
     public async Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
     {
+        await _g2000.SetHvStateAsync(G2000HvState.HvAus, cancellationToken).ConfigureAwait(false);
         await _physicalInterlock.CloseAllInterlocksAsync(cancellationToken).ConfigureAwait(false);
         return await _g2000.ResetAsync(cancellationToken).ConfigureAwait(false);
     }

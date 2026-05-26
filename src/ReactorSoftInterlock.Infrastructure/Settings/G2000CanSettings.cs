@@ -28,6 +28,25 @@ public sealed class G2000CanSettings
 
     public G2000StartupRecipe StartupRecipe { get; set; } = new();
 
+    public G2000CanSettings Clone()
+    {
+        return new G2000CanSettings
+        {
+            Channel = Channel,
+            NodeId = NodeId,
+            CommandPeriodMs = CommandPeriodMs,
+            ReadPollIntervalMs = ReadPollIntervalMs,
+            UiMode = UiMode,
+            RecoveryPolicy = RecoveryPolicy,
+            VerifiedU2MinVoltageV = VerifiedU2MinVoltageV,
+            VerifiedU2MaxVoltageV = VerifiedU2MaxVoltageV,
+            AllowUnsafeU2Writes = AllowUnsafeU2Writes,
+            HvReadyLeadTimeMs = HvReadyLeadTimeMs,
+            WritableSetpoints = WritableSetpoints?.Clone() ?? new G2000WritableSetpoints(),
+            StartupRecipe = StartupRecipe?.Clone() ?? new G2000StartupRecipe()
+        };
+    }
+
     public void Normalize()
     {
         if (CommandPeriodMs <= 0)

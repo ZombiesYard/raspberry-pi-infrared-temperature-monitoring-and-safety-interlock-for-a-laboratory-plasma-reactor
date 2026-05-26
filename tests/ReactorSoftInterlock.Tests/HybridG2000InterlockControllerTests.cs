@@ -8,30 +8,45 @@ namespace ReactorSoftInterlock.Tests;
 public sealed class HybridG2000InterlockControllerTests
 {
     [Fact]
-    public async Task StopAsync_TripsCanAndPhysicalInterlock()
+    public async Task StopAsync_OpensOnlyPhysicalInterlock()
     {
         var events = new List<string>();
         using var controller = new HybridG2000InterlockController(new FakeG2000Controller(events), new FakePhysicalRelay(events));
 
         await controller.StopAsync(CancellationToken.None);
 
-        Assert.Equal(["g2000-stop", "physical-open-all"], events);
+        Assert.Equal(["physical-open-all"], events);
     }
 
     [Fact]
-    public async Task ResetAsync_ClosesPhysicalInterlockBeforeCanReset()
+    public async Task ResetAsync_MakesG2000SafeBeforeClosingPhysicalInterlock()
     {
         var events = new List<string>();
         using var controller = new HybridG2000InterlockController(new FakeG2000Controller(events), new FakePhysicalRelay(events));
 
         await controller.ResetAsync(CancellationToken.None);
 
-        Assert.Equal(["physical-close-all", "g2000-reset"], events);
+        Assert.Equal(["g2000-set-HvAus", "physical-close-all", "g2000-reset"], events);
+    }
+
+    [Fact]
+    public async Task StartAutomaticSequenceAsync_ForwardsToG2000Only()
+    {
+        var events = new List<string>();
+        using var controller = new HybridG2000InterlockController(new FakeG2000Controller(events), new FakePhysicalRelay(events));
+
+        await controller.StartAutomaticSequenceAsync(new G2000StartupRecipe(), CancellationToken.None);
+
+        Assert.Equal(["g2000-start-automatic"], events);
     }
 
     private sealed class FakeG2000Controller(List<string> events) : IG2000Controller
     {
-        public event EventHandler<G2000TelemetrySnapshot>? TelemetryUpdated;
+        public event EventHandler<G2000TelemetrySnapshot>? TelemetryUpdated
+        {
+            add { }
+            remove { }
+        }
 
         public G2000TelemetrySnapshot Snapshot { get; } = new();
         public G2000WritableSetpoints TargetSetpoints { get; } = new();
@@ -40,10 +55,23 @@ public sealed class HybridG2000InterlockControllerTests
         public G2000UiMode UiMode { get; set; }
         public bool IsTripLatched => false;
         public Task EnsureConnectedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task SetHvStateAsync(G2000HvState state, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task SetHvStateAsync(G2000HvState state, CancellationToken cancellationToken)
+        {
+            events.Add($"g2000-set-{state}");
+            return Task.CompletedTask;
+        }
         public Task ApplyWritableSetpointsAsync(G2000WritableSetpoints setpoints, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task StartAutomaticSequenceAsync(G2000StartupRecipe recipe, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task StopAutomaticSequenceAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StartAutomaticSequenceAsync(G2000StartupRecipe recipe, CancellationToken cancellationToken)
+        {
+            events.Add("g2000-start-automatic");
+            return Task.CompletedTask;
+        }
+
+        public Task StopAutomaticSequenceAsync(CancellationToken cancellationToken)
+        {
+            events.Add("g2000-stop-automatic");
+            return Task.CompletedTask;
+        }
 
         public Task<RelayAction> StopAsync(CancellationToken cancellationToken)
         {

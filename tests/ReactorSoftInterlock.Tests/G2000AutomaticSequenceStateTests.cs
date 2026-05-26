@@ -26,6 +26,25 @@ public sealed class G2000AutomaticSequenceStateTests
     }
 
     [Fact]
+    public void Sequence_UsesFullConfiguredDurationForLongStage1()
+    {
+        var recipe = new G2000StartupRecipe
+        {
+            Stage1VoltageV = 63.0,
+            Stage1DurationMs = 6000,
+            Stage2VoltageV = 43.0,
+            Stage2HoldEnabled = true
+        };
+
+        var startedAt = new DateTimeOffset(2026, 5, 8, 12, 0, 0, TimeSpan.Zero);
+        var sequence = new G2000AutomaticSequenceState(recipe, startedAt);
+
+        Assert.False(sequence.TryAdvance(startedAt.AddMilliseconds(5999), out _));
+        Assert.True(sequence.TryAdvance(startedAt.AddMilliseconds(6000), out var stage2Voltage));
+        Assert.Equal(43.0, stage2Voltage);
+    }
+
+    [Fact]
     public void Sequence_CanMarkCompletionWhenStage2ShouldNotHold()
     {
         var recipe = new G2000StartupRecipe

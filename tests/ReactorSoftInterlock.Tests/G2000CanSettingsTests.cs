@@ -66,4 +66,35 @@ public sealed class G2000CanSettingsTests
 
         Assert.Contains(nameof(G2000StartupRecipe.Stage2VoltageV), ex.Message);
     }
+
+    [Fact]
+    public void Clone_PreservesTimingAndSafetyFields()
+    {
+        var settings = new G2000CanSettings
+        {
+            Channel = "UsbBus2",
+            NodeId = 5,
+            CommandPeriodMs = 150,
+            ReadPollIntervalMs = 30,
+            UiMode = nameof(G2000UiMode.Automatic),
+            RecoveryPolicy = nameof(TripRecoveryPolicy.RestorePreviousState),
+            VerifiedU2MinVoltageV = 10.0,
+            VerifiedU2MaxVoltageV = 80.0,
+            AllowUnsafeU2Writes = true,
+            HvReadyLeadTimeMs = 5000
+        };
+
+        var clone = settings.Clone();
+
+        Assert.Equal("UsbBus2", clone.Channel);
+        Assert.Equal((byte)5, clone.NodeId);
+        Assert.Equal(150, clone.CommandPeriodMs);
+        Assert.Equal(30, clone.ReadPollIntervalMs);
+        Assert.Equal(nameof(G2000UiMode.Automatic), clone.UiMode);
+        Assert.Equal(nameof(TripRecoveryPolicy.RestorePreviousState), clone.RecoveryPolicy);
+        Assert.Equal(10.0, clone.VerifiedU2MinVoltageV);
+        Assert.Equal(80.0, clone.VerifiedU2MaxVoltageV);
+        Assert.True(clone.AllowUnsafeU2Writes);
+        Assert.Equal(5000, clone.HvReadyLeadTimeMs);
+    }
 }

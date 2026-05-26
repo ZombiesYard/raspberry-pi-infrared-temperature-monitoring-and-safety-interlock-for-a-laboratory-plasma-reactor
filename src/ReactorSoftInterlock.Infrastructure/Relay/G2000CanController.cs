@@ -8,6 +8,9 @@ namespace ReactorSoftInterlock.Infrastructure.Relay;
 public sealed class G2000CanController : IG2000Controller
 {
     private readonly G2000CanSettings _settings;
+    private readonly IPcanBus _pcanBus;
+    private readonly Func<DateTimeOffset> _now;
+    private readonly bool _startBackgroundLoops;
     private readonly ushort _channelHandle;
     private readonly TimeSpan _commandPeriod;
     private readonly TimeSpan _readPollInterval;
@@ -34,8 +37,20 @@ public sealed class G2000CanController : IG2000Controller
     private DateTimeOffset? _pendingHvOnAt;
 
     public G2000CanController(G2000CanSettings settings)
+        : this(settings, new NativePcanBus(), static () => DateTimeOffset.Now, startBackgroundLoops: true)
+    {
+    }
+
+    internal G2000CanController(
+        G2000CanSettings settings,
+        IPcanBus pcanBus,
+        Func<DateTimeOffset> now,
+        bool startBackgroundLoops)
     {
         _settings = settings;
+        _pcanBus = pcanBus;
+        _now = now;
+        _startBackgroundLoops = startBackgroundLoops;
         _settings.Normalize();
         _channelHandle = PcanChannelParser.ParseOrThrow(settings.Channel);
         if (settings.CommandPeriodMs <= 0)
@@ -153,6 +168,13 @@ public sealed class G2000CanController : IG2000Controller
         await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task RunSenderTickForTestAsync(CancellationToken cancellationToken)
+    {
+        await MaybeAdvanceAutomaticSequenceAsync(cancellationToken).ConfigureAwait(false);
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+        UpdateCommunicationHealth();
+    }
+
     public async Task<RelayAction> StopAsync(CancellationToken cancellationToken)
     {
         await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
@@ -240,7 +262,7 @@ public sealed class G2000CanController : IG2000Controller
         lock (_sync)
         {
             _startupRecipe = recipe.Clone();
-            _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, DateTimeOffset.Now);
+            var now = _now();
             _uiMode = G2000UiMode.Automatic;
             _tripLatched = false;
             _tripReason = string.Empty;
@@ -254,13 +276,23 @@ public sealed class G2000CanController : IG2000Controller
                 _targetHvState = G2000HvState.HvReady;
                 if (_startupRecipe.EnterHvOnAtStart)
                 {
-                    _pendingHvOnAt = DateTimeOffset.Now.AddMilliseconds(_settings.HvReadyLeadTimeMs);
+                    _automaticSequence = null;
+                    _pendingHvOnAt = now.AddMilliseconds(_settings.HvReadyLeadTimeMs);
                     _automaticStageLabel = "ReadyLead";
+                }
+                else
+                {
+                    _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
                 }
             }
             else if (_startupRecipe.EnterHvOnAtStart)
             {
                 _targetHvState = G2000HvState.HvOn;
+                _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
+            }
+            else
+            {
+                _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
             }
 
             UpdateSnapshotLocked();
@@ -270,18 +302,20 @@ public sealed class G2000CanController : IG2000Controller
         PublishTelemetry();
     }
 
-    public Task StopAutomaticSequenceAsync(CancellationToken cancellationToken)
+    public async Task StopAutomaticSequenceAsync(CancellationToken cancellationToken)
     {
         lock (_sync)
         {
             _automaticSequence = null;
+            _pendingHvOnAt = null;
+            _targetHvState = G2000HvState.HvAus;
             _uiMode = G2000UiMode.Manual;
             _automaticStageLabel = "Stopped";
             UpdateSnapshotLocked();
         }
 
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
         PublishTelemetry();
-        return Task.CompletedTask;
     }
 
     public void Dispose()
@@ -316,7 +350,7 @@ public sealed class G2000CanController : IG2000Controller
 
         if (_initialized)
         {
-            PcanBasicNative.Uninitialize(_channelHandle);
+            _pcanBus.Uninitialize(_channelHandle);
         }
     }
 
@@ -327,7 +361,7 @@ public sealed class G2000CanController : IG2000Controller
             return;
         }
 
-        var status = PcanBasicNative.Initialize(_channelHandle, PcanBasicNative.PcanBaud125K, 0, 0, 0);
+        var status = _pcanBus.Initialize(_channelHandle, PcanBasicNative.PcanBaud125K, 0, 0, 0);
         if (status != PcanBasicNative.PcanErrorOk)
         {
             throw new InvalidOperationException($"PCAN initialization failed with status 0x{status:X} on channel {_settings.Channel}.");
@@ -345,6 +379,11 @@ public sealed class G2000CanController : IG2000Controller
     {
         lock (_sync)
         {
+            if (!_startBackgroundLoops)
+            {
+                return;
+            }
+
             if (_loopsCts is not null)
             {
                 return;
@@ -396,7 +435,7 @@ public sealed class G2000CanController : IG2000Controller
         while (!cancellationToken.IsCancellationRequested)
         {
             var message = PcanBasicNative.TPCANMsg.CreateEmpty();
-            var status = PcanBasicNative.Read(_channelHandle, ref message, out _);
+            var status = _pcanBus.Read(_channelHandle, ref message, out _);
             if (status == PcanBasicNative.PcanErrorReceiveQueueEmpty)
             {
                 return;
@@ -415,7 +454,7 @@ public sealed class G2000CanController : IG2000Controller
     {
         var shouldForceStop = false;
         var shouldAutoRecover = false;
-        var now = DateTimeOffset.Now;
+        var now = _now();
         lock (_sync)
         {
             _snapshot.LastReceivedAt = now;
@@ -509,13 +548,24 @@ public sealed class G2000CanController : IG2000Controller
         var shouldSend = false;
         lock (_sync)
         {
-            if (_pendingHvOnAt is not null && DateTimeOffset.Now >= _pendingHvOnAt.Value)
+            var now = _now();
+            if (_pendingHvOnAt is not null)
             {
+                if (now < _pendingHvOnAt.Value)
+                {
+                    return;
+                }
+
                 _targetHvState = G2000HvState.HvOn;
                 _pendingHvOnAt = null;
-                if (_uiMode == G2000UiMode.Automatic && _automaticSequence is not null)
+                if (_uiMode == G2000UiMode.Automatic)
                 {
+                    _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
                     _automaticStageLabel = _automaticSequence.CurrentStage;
+                }
+                else
+                {
+                    _automaticStageLabel = "Manual";
                 }
 
                 UpdateSnapshotLocked();
@@ -531,7 +581,7 @@ public sealed class G2000CanController : IG2000Controller
             }
 
             if (_automaticSequence is not null &&
-                _automaticSequence.TryAdvance(DateTimeOffset.Now, out var nextVoltageV))
+                _automaticSequence.TryAdvance(now, out var nextVoltageV))
             {
                 _targetSetpoints.VoltageV = nextVoltageV;
                 _setpointsDirty = true;
@@ -586,7 +636,7 @@ public sealed class G2000CanController : IG2000Controller
                 else
                 {
                     _uiMode = G2000UiMode.Automatic;
-                    _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, DateTimeOffset.Now);
+                    _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, _now());
                     _targetSetpoints.VoltageV = _startupRecipe.Stage1VoltageV;
                     _automaticStageLabel = "Stage1";
                 }
@@ -609,7 +659,7 @@ public sealed class G2000CanController : IG2000Controller
                 _settings.HvReadyLeadTimeMs > 0)
             {
                 _targetHvState = G2000HvState.HvReady;
-                _pendingHvOnAt = DateTimeOffset.Now.AddMilliseconds(_settings.HvReadyLeadTimeMs);
+                _pendingHvOnAt = _now().AddMilliseconds(_settings.HvReadyLeadTimeMs);
                 _automaticStageLabel = "ReadyLead";
             }
             else
@@ -675,7 +725,7 @@ public sealed class G2000CanController : IG2000Controller
 
             lock (_sync)
             {
-                _snapshot.LastSentAt = DateTimeOffset.Now;
+                _snapshot.LastSentAt = _now();
                 UpdateSnapshotLocked();
             }
         }
@@ -691,7 +741,7 @@ public sealed class G2000CanController : IG2000Controller
     {
         cancellationToken.ThrowIfCancellationRequested();
         var message = PcanBasicNative.TPCANMsg.CreateStandard(id, data);
-        var status = PcanBasicNative.Write(_channelHandle, ref message);
+        var status = _pcanBus.Write(_channelHandle, ref message);
         if (status != PcanBasicNative.PcanErrorOk)
         {
             throw new InvalidOperationException($"PCAN write failed with status 0x{status:X} on channel {_settings.Channel}.");
@@ -741,7 +791,7 @@ public sealed class G2000CanController : IG2000Controller
         lock (_sync)
         {
             _snapshot.CommunicationHealthy = _snapshot.LastReceivedAt is not null &&
-                                             DateTimeOffset.Now - _snapshot.LastReceivedAt.Value <= TimeSpan.FromSeconds(2);
+                                             _now() - _snapshot.LastReceivedAt.Value <= TimeSpan.FromSeconds(2);
             UpdateSnapshotLocked();
         }
 
