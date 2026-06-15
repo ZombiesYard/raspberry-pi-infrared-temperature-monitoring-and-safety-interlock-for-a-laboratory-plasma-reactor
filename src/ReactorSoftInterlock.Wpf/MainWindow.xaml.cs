@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.IO.Ports;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -44,6 +45,7 @@ public partial class MainWindow : Window
     private G2000TelemetrySnapshot _lastG2000Snapshot = new();
     private string? _lastG2000ConnectionError;
     private string? _relayRuntimeKey;
+    private readonly SemaphoreSlim _branchInterlockGate = new(1, 1);
     private bool _isBindingSettings;
     private bool _isRefreshingGasFlow;
     private bool _g2000CombinedStartInProgress;
@@ -244,15 +246,15 @@ public partial class MainWindow : Window
         try
         {
             await SaveSettingsFromUiAsync();
-            if (!ValidateRelaySetup(requireRestore: false))
+            if (!ValidateBranchInterlockSetup(requireRestore: false))
             {
                 return;
             }
 
-            await _relayBankController!.OpenAllInterlocksAsync(CancellationToken.None);
+            await ExecuteBranchInterlockCommandAsync(static controller => controller.OpenAllInterlocksAsync(CancellationToken.None));
             SetAllChannelStates(false);
             SetCurrentMode(T("mode.engineering"));
-            FooterText.Text = T("footer.allDisconnected");
+            FooterText.Text = FormatBranchInterlockFooter(T("footer.allDisconnected"));
         }
         catch (Exception ex)
         {
@@ -265,15 +267,15 @@ public partial class MainWindow : Window
         try
         {
             await SaveSettingsFromUiAsync();
-            if (!ValidateRelaySetup(requireRestore: true))
+            if (!ValidateBranchInterlockSetup(requireRestore: true))
             {
                 return;
             }
 
-            await _relayBankController!.CloseAllInterlocksAsync(CancellationToken.None);
+            await ExecuteBranchInterlockCommandAsync(static controller => controller.CloseAllInterlocksAsync(CancellationToken.None));
             SetAllChannelStates(true);
             SetCurrentMode(T("mode.engineering"));
-            FooterText.Text = T("footer.allConnected");
+            FooterText.Text = FormatBranchInterlockFooter(T("footer.allConnected"));
         }
         catch (Exception ex)
         {
@@ -301,15 +303,15 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (!ValidateRelaySetup(requireRestore: true, specificChannelNumber: channelNumber))
+            if (!ValidateBranchInterlockSetup(requireRestore: true, specificChannelNumber: channelNumber))
             {
                 return;
             }
 
-            await _relayBankController!.SetChannelClosedAsync(channelNumber, closed, CancellationToken.None);
+            await ExecuteBranchInterlockCommandAsync(controller => controller.SetChannelClosedAsync(channelNumber, closed, CancellationToken.None));
             SetChannelState(channelNumber, closed);
             SetCurrentMode(T("mode.engineering"));
-            FooterText.Text = string.Format(CultureInfo.InvariantCulture, footerTemplate, channelNumber);
+            FooterText.Text = FormatBranchInterlockFooter(string.Format(CultureInfo.InvariantCulture, footerTemplate, channelNumber));
         }
         catch (Exception ex)
         {
@@ -407,16 +409,16 @@ public partial class MainWindow : Window
         try
         {
             await SaveSettingsFromUiAsync();
-            if (!ValidateRelaySetup(requireRestore: true))
+            if (!ValidateBranchInterlockSetup(requireRestore: true))
             {
                 return;
             }
 
-            await _relayBankController!.CloseAllInterlocksAsync(CancellationToken.None);
+            await ExecuteBranchInterlockCommandAsync(static controller => controller.CloseAllInterlocksAsync(CancellationToken.None));
             SetAllChannelStates(true);
             SetCurrentMode(T("mode.monitoring"));
             MainTabControl.SelectedItem = MonitorTab;
-            FooterText.Text = T("footer.monitoringControlRestored");
+            FooterText.Text = FormatBranchInterlockFooter(T("footer.monitoringControlRestored"));
         }
         catch (Exception ex)
         {
@@ -783,6 +785,35 @@ public partial class MainWindow : Window
             : new SerialRelayController(_settings.Relay);
     }
 
+    private IRelayBankController CreateBranchInterlockRelay()
+    {
+        _settings.Relay.Normalize();
+
+        return _settings.Relay.ResolveMode() switch
+        {
+            RelayControllerMode.DryRun => new DryRunRelayController(),
+            RelayControllerMode.Serial => new SerialRelayController(_settings.Relay),
+            RelayControllerMode.G2000Can => CreatePhysicalInterlockRelay(),
+            _ => throw new InvalidOperationException($"Unsupported relay controller mode '{_settings.Relay.Mode}'.")
+        };
+    }
+
+    private async Task ExecuteBranchInterlockCommandAsync(Func<IRelayBankController, Task> command)
+    {
+        await _branchInterlockGate.WaitAsync(CancellationToken.None);
+        IRelayBankController? branchInterlock = null;
+        try
+        {
+            branchInterlock = CreateBranchInterlockRelay();
+            await command(branchInterlock);
+        }
+        finally
+        {
+            (branchInterlock as IDisposable)?.Dispose();
+            _branchInterlockGate.Release();
+        }
+    }
+
     private static string CreateRelayRuntimeKey(RelaySettings settings)
     {
         var channelKey = string.Join(
@@ -818,7 +849,7 @@ public partial class MainWindow : Window
 
     private IRelayBankController CreateProcessOutputController()
     {
-        return new ProcessOutputController(_relayBankController!);
+        return new ProcessOutputController(new SynchronizedRelayBankController(_relayBankController!, _branchInterlockGate));
     }
 
     private async Task<IG2000Controller?> EnsureG2000ControlAsync()
@@ -931,7 +962,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (!ValidateRelaySetup(requireRestore: true))
+        if (!ValidateMonitoringRelaySetup(requireRestore: true))
         {
             return false;
         }
@@ -970,7 +1001,7 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private bool ValidateRelaySetup(bool requireRestore, int? specificChannelNumber = null)
+    private bool ValidateMonitoringRelaySetup(bool requireRestore, int? specificChannelNumber = null)
     {
         _settings.Relay.Normalize();
 
@@ -983,9 +1014,28 @@ public partial class MainWindow : Window
         };
     }
 
+    private bool ValidateBranchInterlockSetup(bool requireRestore, int? specificChannelNumber = null)
+    {
+        _settings.Relay.Normalize();
+
+        return _settings.Relay.ResolveMode() switch
+        {
+            RelayControllerMode.DryRun => true,
+            RelayControllerMode.Serial => ValidateSerialRelaySetup(requireRestore, specificChannelNumber),
+            RelayControllerMode.G2000Can => ValidatePhysicalInterlockSetupForCanMode(requireRestore, specificChannelNumber),
+            _ => false
+        };
+    }
+
     private bool ValidatePhysicalInterlockSetupForCanMode(bool requireRestore, int? specificChannelNumber)
     {
-        return _settings.Relay.DryRun || ValidateSerialRelaySetup(requireRestore, specificChannelNumber);
+        if (_settings.Relay.DryRun)
+        {
+            ShowSetupWarning("Physical branch interlock relay is still in Dry Run. Disable Dry Run and select the relay COM port before opening/closing branch interlocks or starting live monitoring. 物理 Branch Interlock 继电器仍处于 Dry Run，请关闭 Dry Run 并选择继电器串口后再断开/闭合或启动正式监控。");
+            return false;
+        }
+
+        return ValidateSerialRelaySetup(requireRestore, specificChannelNumber);
     }
 
     private bool ValidateSerialRelaySetup(bool requireRestore, int? specificChannelNumber)
@@ -1372,6 +1422,7 @@ public partial class MainWindow : Window
     {
         Title = T("app.title");
         TitleText.Text = T("app.title");
+        VersionText.Text = $"Version {GetSoftwareVersion()}";
         SubtitleText.Text = T("app.subtitle");
         FileMenu.Header = T("menu.file");
         ExportMenuItem.Header = T("menu.export");
@@ -1451,6 +1502,15 @@ public partial class MainWindow : Window
         UpdateGasFlowDisplay();
     }
 
+    private static string GetSoftwareVersion()
+    {
+        var informationalVersion = typeof(MainWindow).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        return string.IsNullOrWhiteSpace(informationalVersion) ? "dev" : informationalVersion;
+    }
+
     private void ApplyChannelLabels()
     {
         foreach (var channel in _channelUis)
@@ -1522,29 +1582,31 @@ public partial class MainWindow : Window
 
     private void UpdateG2000ModeAvailability()
     {
-        var isCanMode = _settings?.Relay.ResolveMode() == RelayControllerMode.G2000Can;
+        var relayMode = _settings?.Relay.ResolveMode();
+        var isCanMode = relayMode == RelayControllerMode.G2000Can;
         G2000Tab.IsEnabled = true;
         G2000Tab.ToolTip = isCanMode
             ? null
             : $"G2000 diagnostics are read-only because Relay.Mode is {_settings?.Relay.Mode ?? "--"}.";
         var physicalRelayAvailable = isCanMode && _settings is not null && !_settings.Relay.DryRun;
 
+        TestRelayButton.IsEnabled = true;
+        TestRelayResetButton.IsEnabled = true;
+        TripAllEngineeringButton.IsEnabled = true;
+        RestoreAllEngineeringButton.IsEnabled = true;
+
+        var branchInterlockTooltip = BuildBranchInterlockTooltip(relayMode, _settings?.Relay.DryRun == true);
+        TestRelayButton.ToolTip = branchInterlockTooltip;
+        TestRelayResetButton.ToolTip = branchInterlockTooltip;
+        TripAllEngineeringButton.ToolTip = branchInterlockTooltip;
+        RestoreAllEngineeringButton.ToolTip = branchInterlockTooltip;
+
         foreach (var channel in _channelUis)
         {
-            channel.OpenButton.IsEnabled = !isCanMode || physicalRelayAvailable;
-            channel.CloseButton.IsEnabled = !isCanMode || physicalRelayAvailable;
-            string? tooltip = null;
-            if (isCanMode && !physicalRelayAvailable)
-            {
-                tooltip = "G2000 CAN mode is active, but the physical relay fallback is still in Dry Run.";
-            }
-            else if (isCanMode)
-            {
-                tooltip = "Physical interlock relay only. This does not directly command HV EIN/AUS.";
-            }
-
-            channel.OpenButton.ToolTip = tooltip;
-            channel.CloseButton.ToolTip = tooltip;
+            channel.OpenButton.IsEnabled = true;
+            channel.CloseButton.IsEnabled = true;
+            channel.OpenButton.ToolTip = branchInterlockTooltip;
+            channel.CloseButton.ToolTip = branchInterlockTooltip;
         }
 
         if (isCanMode)
@@ -1568,6 +1630,33 @@ public partial class MainWindow : Window
 
         UpdateG2000SettingsSummary();
         G2000DiagnosticStatusText.Text = G2000ConnectionText.Text;
+    }
+
+    private string FormatBranchInterlockFooter(string footerText)
+    {
+        return _settings.Relay.ResolveMode() == RelayControllerMode.DryRun
+            ? $"{footerText} Dry Run: no hardware command was sent."
+            : footerText;
+    }
+
+    private static string? BuildBranchInterlockTooltip(RelayControllerMode? relayMode, bool dryRun)
+    {
+        if (relayMode == RelayControllerMode.DryRun)
+        {
+            return "Dry Run is active. This command updates the UI only; no hardware relay command will be sent.";
+        }
+
+        if (relayMode == RelayControllerMode.G2000Can && dryRun)
+        {
+            return "G2000 CAN mode is active. Disable Dry Run before this physical branch interlock command can move hardware.";
+        }
+
+        if (relayMode == RelayControllerMode.G2000Can)
+        {
+            return "Physical interlock relay only. This does not directly command HV EIN/AUS.";
+        }
+
+        return null;
     }
 
     private void SetStatus(MonitorStatus status)
