@@ -352,6 +352,21 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await _sampleLog.ClearAsync(CancellationToken.None);
+            _history.Clear();
+            DrawTemperatureChart();
+            FooterText.Text = T("footer.historyCleared");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
     private async void SaveSettingsButton_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -537,16 +552,6 @@ public partial class MainWindow : Window
         });
     }
 
-    private async void G2000ManualTwoStepButton_Click(object sender, RoutedEventArgs e)
-    {
-        await ExecuteG2000Async(async controller =>
-        {
-            await SaveG2000SettingsFromUiAsync();
-            await controller.StartAutomaticSequenceAsync(_settings.Relay.G2000Can.StartupRecipe.Clone(), CancellationToken.None);
-            FooterText.Text = "Verified G2000 startup recipe started. U2 will stay inside the configured software range unless AllowUnsafeU2Writes is enabled.";
-        });
-    }
-
     private async void G2000StartAutomaticButton_Click(object sender, RoutedEventArgs e)
     {
         await ExecuteG2000Async(async controller =>
@@ -646,17 +651,6 @@ public partial class MainWindow : Window
         {
             await controller.StopAutomaticSequenceAsync(CancellationToken.None);
             FooterText.Text = "Automatic G2000 recipe stopped.";
-        });
-    }
-
-    private async void G2000ResetTripButton_Click(object sender, RoutedEventArgs e)
-    {
-        await ExecuteG2000Async(async controller =>
-        {
-            await SaveG2000SettingsFromUiAsync();
-            controller.RecoveryPolicy = _settings.Relay.G2000Can.ResolveRecoveryPolicy();
-            await controller.ResetAsync(CancellationToken.None);
-            FooterText.Text = "G2000 recovery command applied.";
         });
     }
 
@@ -1358,6 +1352,7 @@ public partial class MainWindow : Window
         _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
         _settings.Amc2100.Normalize();
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        ApplyG2000RecoveryPolicyToController();
         UpdateGasFlowDisplay();
         UpdateG2000SettingsSummary();
     }
@@ -1380,6 +1375,7 @@ public partial class MainWindow : Window
         _settings.Relay.G2000Can.ValidateWritableSetpoints(_settings.Relay.G2000Can.WritableSetpoints);
         _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        ApplyG2000RecoveryPolicyToController();
         UpdateG2000SettingsSummary();
     }
 
@@ -1416,6 +1412,41 @@ public partial class MainWindow : Window
 
         UpdateG2000SettingsSummary();
         G2000DiagnosticStatusText.Text = G2000ConnectionText.Text;
+    }
+
+    private async void G2000RecoveryPolicyBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isBindingSettings || _settings is null)
+        {
+            return;
+        }
+
+        try
+        {
+            UpdateSelectedG2000RecoveryPolicySetting();
+            await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            ApplyG2000RecoveryPolicyToController();
+            UpdateG2000SettingsSummary();
+            G2000DiagnosticStatusText.Text = G2000ConnectionText.Text;
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private void UpdateSelectedG2000RecoveryPolicySetting()
+    {
+        var policy = (TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ?? _settings.Relay.G2000Can.ResolveRecoveryPolicy();
+        _settings.Relay.G2000Can.RecoveryPolicy = policy.ToString();
+    }
+
+    private void ApplyG2000RecoveryPolicyToController()
+    {
+        if (_g2000Controller is not null)
+        {
+            _g2000Controller.RecoveryPolicy = _settings.Relay.G2000Can.ResolveRecoveryPolicy();
+        }
     }
 
     private void ApplyLanguage()
@@ -1458,6 +1489,7 @@ public partial class MainWindow : Window
         ResetButton.Content = T("button.reset");
         SelectRoiButton.Content = T("button.selectRoi");
         ExportButton.Content = T("button.export");
+        ClearHistoryButton.Content = T("button.clearHistory");
         TestRelayButton.Content = T("button.disconnectAll");
         TestRelayResetButton.Content = T("button.connectAll");
         TripAllEngineeringButton.Content = T("button.disconnectAll");

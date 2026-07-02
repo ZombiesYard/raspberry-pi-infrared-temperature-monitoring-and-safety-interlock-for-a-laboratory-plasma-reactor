@@ -19,9 +19,9 @@ public static class G2000RecoveryPlanner
             {
                 HvState = preTripState.HvState,
                 Setpoints = preTripState.Setpoints.Clone(),
-                UiMode = preTripState.UiMode,
+                UiMode = preTripState.AutomaticSequenceActive ? G2000UiMode.Automatic : preTripState.UiMode,
                 ResumeAutomaticSequence = preTripState.AutomaticSequenceActive,
-                AutomaticStage = preTripState.AutomaticStage,
+                AutomaticStage = preTripState.AutomaticSequenceActive ? "Stage1" : preTripState.AutomaticStage,
                 Recipe = preTripState.Recipe.Clone()
             },
             _ => new G2000RecoveryDecision

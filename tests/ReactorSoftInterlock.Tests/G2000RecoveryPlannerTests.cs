@@ -37,7 +37,7 @@ public sealed class G2000RecoveryPlannerTests
     }
 
     [Fact]
-    public void RestorePreviousState_ReusesCapturedAutomaticContext()
+    public void RestorePreviousState_RerunsCapturedAutomaticRecipeFromStage1()
     {
         var decision = G2000RecoveryPlanner.Plan(
             TripRecoveryPolicy.RestorePreviousState,
@@ -53,7 +53,7 @@ public sealed class G2000RecoveryPlannerTests
         Assert.Equal(G2000HvState.HvOn, decision.HvState);
         Assert.Equal(G2000UiMode.Automatic, decision.UiMode);
         Assert.True(decision.ResumeAutomaticSequence);
-        Assert.Equal("Stage2", decision.AutomaticStage);
+        Assert.Equal("Stage1", decision.AutomaticStage);
         Assert.Equal(43.0, decision.Setpoints.VoltageV);
     }
 }

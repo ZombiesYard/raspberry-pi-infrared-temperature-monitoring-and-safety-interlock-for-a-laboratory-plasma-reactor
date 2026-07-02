@@ -208,6 +208,12 @@ public sealed class MonitoringServiceTests
         {
             return Task.CompletedTask;
         }
+
+        public Task ClearAsync(CancellationToken cancellationToken)
+        {
+            Samples.Clear();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FixedClock : IClock

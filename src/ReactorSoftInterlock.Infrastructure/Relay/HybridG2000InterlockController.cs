@@ -45,13 +45,31 @@ public sealed class HybridG2000InterlockController : IG2000Controller
 
     public async Task<RelayAction> StopAsync(CancellationToken cancellationToken)
     {
+        if (_g2000 is IG2000TripLatch tripLatch)
+        {
+            tripLatch.LatchSoftwareTrip("Temperature limit trip");
+        }
+
         await _physicalInterlock.OpenAllInterlocksAsync(cancellationToken).ConfigureAwait(false);
         return RelayAction.StopSent;
     }
 
     public async Task<RelayAction> ResetAsync(CancellationToken cancellationToken)
     {
-        await _g2000.SetHvStateAsync(G2000HvState.HvAus, cancellationToken).ConfigureAwait(false);
+        if (_g2000.IsTripLatched &&
+            _g2000 is IG2000RecoveryPreparation recoveryPreparation)
+        {
+            await recoveryPreparation.PrepareRecoveryWhileInterlockOpenAsync(cancellationToken).ConfigureAwait(false);
+            await _physicalInterlock.CloseAllInterlocksAsync(cancellationToken).ConfigureAwait(false);
+            await recoveryPreparation.CompletePreparedRecoveryAfterInterlockClosedAsync(cancellationToken).ConfigureAwait(false);
+            return RelayAction.ResetSent;
+        }
+
+        if (!_g2000.IsTripLatched)
+        {
+            await _g2000.SetHvStateAsync(G2000HvState.HvAus, cancellationToken).ConfigureAwait(false);
+        }
+
         await _physicalInterlock.CloseAllInterlocksAsync(cancellationToken).ConfigureAwait(false);
         return await _g2000.ResetAsync(cancellationToken).ConfigureAwait(false);
     }

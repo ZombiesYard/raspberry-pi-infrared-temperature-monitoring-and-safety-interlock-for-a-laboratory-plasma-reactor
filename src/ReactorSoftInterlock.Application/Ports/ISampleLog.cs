@@ -9,4 +9,6 @@ public interface ISampleLog
     Task<IReadOnlyList<TemperatureSample>> ReadRecentAsync(int maxRows, CancellationToken cancellationToken);
 
     Task ExportAsync(string destinationPath, CancellationToken cancellationToken);
+
+    Task ClearAsync(CancellationToken cancellationToken);
 }

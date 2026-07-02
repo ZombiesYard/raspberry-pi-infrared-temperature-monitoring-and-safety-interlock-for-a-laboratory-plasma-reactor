@@ -86,6 +86,196 @@ public sealed class G2000CanControllerAutomaticSequenceTests
         Assert.Equal(G2000CanProtocol.CreateCanBusStopData(), bus.LastCommandData());
     }
 
+    [Fact]
+    public async Task RestorePreviousState_RerunsStartupRecipeFromStage1()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 5000);
+        controller.RecoveryPolicy = TripRecoveryPolicy.RestorePreviousState;
+        var recipe = new G2000StartupRecipe
+        {
+            Stage1VoltageV = 62.0,
+            Stage1DurationMs = 6000,
+            Stage2VoltageV = 42.0,
+            Stage2HoldEnabled = true,
+            EnterHvReadyBeforeRun = true,
+            EnterHvOnAtStart = true
+        };
+
+        await controller.StartAutomaticSequenceAsync(recipe, CancellationToken.None);
+        clock.Advance(TimeSpan.FromMilliseconds(5000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromMilliseconds(6000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage2", controller.Snapshot.AutomaticStage);
+        Assert.Equal(42.0, controller.TargetSetpoints.VoltageV);
+
+        await controller.StopAsync(CancellationToken.None);
+        await controller.ResetAsync(CancellationToken.None);
+
+        Assert.Equal("ReadyLead", controller.Snapshot.AutomaticStage);
+        Assert.Equal(62.0, controller.TargetSetpoints.VoltageV);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvReadyData(), bus.LastCommandData());
+
+        clock.Advance(TimeSpan.FromMilliseconds(5000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage1", controller.Snapshot.AutomaticStage);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvOnData(), bus.LastCommandData());
+
+        clock.Advance(TimeSpan.FromMilliseconds(6000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage2", controller.Snapshot.AutomaticStage);
+        Assert.Equal(42.0, controller.TargetSetpoints.VoltageV);
+    }
+
+    [Fact]
+    public async Task RestorePreviousState_RerunsStartupRecipeWhenTripHappensDuringReadyLead()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 5000);
+        controller.RecoveryPolicy = TripRecoveryPolicy.RestorePreviousState;
+        var recipe = new G2000StartupRecipe
+        {
+            Stage1VoltageV = 62.0,
+            Stage1DurationMs = 6000,
+            Stage2VoltageV = 42.0,
+            Stage2HoldEnabled = true,
+            EnterHvReadyBeforeRun = true,
+            EnterHvOnAtStart = true
+        };
+
+        await controller.StartAutomaticSequenceAsync(recipe, CancellationToken.None);
+        Assert.Equal("ReadyLead", controller.Snapshot.AutomaticStage);
+
+        await controller.StopAsync(CancellationToken.None);
+        await controller.ResetAsync(CancellationToken.None);
+
+        Assert.Equal("ReadyLead", controller.Snapshot.AutomaticStage);
+        Assert.Equal(62.0, controller.TargetSetpoints.VoltageV);
+
+        clock.Advance(TimeSpan.FromMilliseconds(5000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage1", controller.Snapshot.AutomaticStage);
+
+        clock.Advance(TimeSpan.FromMilliseconds(6000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage2", controller.Snapshot.AutomaticStage);
+        Assert.Equal(42.0, controller.TargetSetpoints.VoltageV);
+    }
+
+    [Fact]
+    public async Task PrepareRecoveryWhileInterlockOpen_ReplacesStage2HvOnBeforeInterlockCloses()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 5000);
+        controller.RecoveryPolicy = TripRecoveryPolicy.RestorePreviousState;
+        var recipe = new G2000StartupRecipe
+        {
+            Stage1VoltageV = 62.0,
+            Stage1DurationMs = 6000,
+            Stage2VoltageV = 42.0,
+            Stage2HoldEnabled = true,
+            EnterHvReadyBeforeRun = true,
+            EnterHvOnAtStart = true
+        };
+
+        await controller.StartAutomaticSequenceAsync(recipe, CancellationToken.None);
+        clock.Advance(TimeSpan.FromMilliseconds(5000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromMilliseconds(6000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage2", controller.Snapshot.AutomaticStage);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvOnData(), bus.LastCommandData());
+
+        var writtenFrameCountBeforeRecovery = bus.WrittenFrameCount;
+        ((IG2000TripLatch)controller).LatchSoftwareTrip("Temperature limit trip");
+        await ((IG2000RecoveryPreparation)controller).PrepareRecoveryWhileInterlockOpenAsync(CancellationToken.None);
+
+        Assert.Equal("ReadyLead", controller.Snapshot.AutomaticStage);
+        Assert.Equal(62.0, controller.TargetSetpoints.VoltageV);
+        var commandFrames = bus.CommandFramesAfter(writtenFrameCountBeforeRecovery).ToArray();
+        Assert.Single(commandFrames);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvReadyData(), commandFrames[0]);
+    }
+
+    [Fact]
+    public async Task PrepareRecoveryWhileInterlockOpen_ForcesHvReadyWhenRecipeStartsHvOnDirectly()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 5000);
+        controller.RecoveryPolicy = TripRecoveryPolicy.RestorePreviousState;
+        var recipe = new G2000StartupRecipe
+        {
+            Stage1VoltageV = 62.0,
+            Stage1DurationMs = 6000,
+            Stage2VoltageV = 42.0,
+            Stage2HoldEnabled = true,
+            EnterHvReadyBeforeRun = false,
+            EnterHvOnAtStart = true
+        };
+
+        await controller.StartAutomaticSequenceAsync(recipe, CancellationToken.None);
+        Assert.Equal("Stage1", controller.Snapshot.AutomaticStage);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvOnData(), bus.LastCommandData());
+        clock.Advance(TimeSpan.FromMilliseconds(6000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage2", controller.Snapshot.AutomaticStage);
+
+        var writtenFrameCountBeforeRecovery = bus.WrittenFrameCount;
+        ((IG2000TripLatch)controller).LatchSoftwareTrip("Temperature limit trip");
+        await ((IG2000RecoveryPreparation)controller).PrepareRecoveryWhileInterlockOpenAsync(CancellationToken.None);
+
+        Assert.Equal("ReadyLead", controller.Snapshot.AutomaticStage);
+        Assert.False(controller.StartupRecipe.EnterHvReadyBeforeRun);
+        var commandFrames = bus.CommandFramesAfter(writtenFrameCountBeforeRecovery).ToArray();
+        Assert.Single(commandFrames);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvReadyData(), commandFrames[0]);
+    }
+
+    [Fact]
+    public async Task PrepareRecoveryWhileInterlockOpen_DoesNotArmHvOnBeforeInterlockClosesWhenLeadIsZero()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 0);
+        controller.RecoveryPolicy = TripRecoveryPolicy.RestorePreviousState;
+        var recipe = new G2000StartupRecipe
+        {
+            Stage1VoltageV = 62.0,
+            Stage1DurationMs = 6000,
+            Stage2VoltageV = 42.0,
+            Stage2HoldEnabled = true,
+            EnterHvReadyBeforeRun = true,
+            EnterHvOnAtStart = true
+        };
+
+        await controller.StartAutomaticSequenceAsync(recipe, CancellationToken.None);
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage1", controller.Snapshot.AutomaticStage);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvOnData(), bus.LastCommandData());
+        clock.Advance(TimeSpan.FromMilliseconds(6000));
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage2", controller.Snapshot.AutomaticStage);
+
+        ((IG2000TripLatch)controller).LatchSoftwareTrip("Temperature limit trip");
+        await ((IG2000RecoveryPreparation)controller).PrepareRecoveryWhileInterlockOpenAsync(CancellationToken.None);
+
+        Assert.True(controller.IsTripLatched);
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("ReadyLead", controller.Snapshot.AutomaticStage);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvReadyData(), bus.LastCommandData());
+
+        await ((IG2000RecoveryPreparation)controller).CompletePreparedRecoveryAfterInterlockClosedAsync(CancellationToken.None);
+        Assert.False(controller.IsTripLatched);
+        await controller.RunSenderTickForTestAsync(CancellationToken.None);
+        Assert.Equal("Stage1", controller.Snapshot.AutomaticStage);
+        Assert.Equal(G2000CanProtocol.CreateCanBusHvOnData(), bus.LastCommandData());
+    }
+
     private static G2000CanController CreateController(FakePcanBus bus, MutableClock clock, int hvReadyLeadTimeMs)
     {
         var settings = new G2000CanSettings
@@ -111,6 +301,8 @@ public sealed class G2000CanControllerAutomaticSequenceTests
     private sealed class FakePcanBus : IPcanBus
     {
         private readonly List<WrittenFrame> _writes = [];
+
+        public int WrittenFrameCount => _writes.Count;
 
         public uint Initialize(ushort channel, ushort btr0Btr1, uint hwType, uint ioPort, ushort interrupt)
         {

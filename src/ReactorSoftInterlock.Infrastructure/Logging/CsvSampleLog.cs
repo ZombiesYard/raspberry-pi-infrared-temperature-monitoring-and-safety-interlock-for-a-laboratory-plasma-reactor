@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using ReactorSoftInterlock.Application.Ports;
@@ -8,56 +9,95 @@ namespace ReactorSoftInterlock.Infrastructure.Logging;
 public sealed class CsvSampleLog : ISampleLog
 {
     public const string Header = "timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot_roi";
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _path;
+    private readonly SemaphoreSlim _gate;
 
     public CsvSampleLog(string path)
     {
         _path = path;
+        _gate = Gates.GetOrAdd(Path.GetFullPath(path), static _ => new SemaphoreSlim(1, 1));
     }
 
     public async Task AppendAsync(TemperatureSample sample, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
-        var shouldWriteHeader = !File.Exists(_path) || new FileInfo(_path).Length == 0;
-        await using var stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.Read);
-        await using var writer = new StreamWriter(stream, Encoding.UTF8);
-        if (shouldWriteHeader)
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            await writer.WriteLineAsync(Header.AsMemory(), cancellationToken).ConfigureAwait(false);
-        }
+            Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
+            var shouldWriteHeader = !File.Exists(_path) || new FileInfo(_path).Length == 0;
+            await using var stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.Read);
+            await using var writer = new StreamWriter(stream, Encoding.UTF8);
+            if (shouldWriteHeader)
+            {
+                await writer.WriteLineAsync(Header.AsMemory(), cancellationToken).ConfigureAwait(false);
+            }
 
-        await writer.WriteLineAsync(ToCsvLine(sample).AsMemory(), cancellationToken).ConfigureAwait(false);
+            await writer.WriteLineAsync(ToCsvLine(sample).AsMemory(), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task<IReadOnlyList<TemperatureSample>> ReadRecentAsync(int maxRows, CancellationToken cancellationToken)
     {
-        if (!File.Exists(_path))
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return [];
-        }
+            if (!File.Exists(_path))
+            {
+                return [];
+            }
 
-        var lines = await File.ReadAllLinesAsync(_path, cancellationToken).ConfigureAwait(false);
-        return lines.Skip(1)
-            .TakeLast(maxRows)
-            .Select(ParseLine)
-            .Where(static sample => sample is not null)
-            .Cast<TemperatureSample>()
-            .ToList();
+            var lines = await File.ReadAllLinesAsync(_path, cancellationToken).ConfigureAwait(false);
+            return lines.Skip(1)
+                .TakeLast(maxRows)
+                .Select(ParseLine)
+                .Where(static sample => sample is not null)
+                .Cast<TemperatureSample>()
+                .ToList();
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
-    public Task ExportAsync(string destinationPath, CancellationToken cancellationToken)
+    public async Task ExportAsync(string destinationPath, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? ".");
-        if (File.Exists(_path))
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            File.Copy(_path, destinationPath, overwrite: true);
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? ".");
+            if (File.Exists(_path))
+            {
+                File.Copy(_path, destinationPath, overwrite: true);
+            }
+            else
+            {
+                await File.WriteAllTextAsync(destinationPath, Header + Environment.NewLine, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+            }
         }
-        else
+        finally
         {
-            File.WriteAllText(destinationPath, Header + Environment.NewLine, Encoding.UTF8);
+            _gate.Release();
         }
+    }
 
-        return Task.CompletedTask;
+    public async Task ClearAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
+            await File.WriteAllTextAsync(_path, Header + Environment.NewLine, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public static string ToCsvLine(TemperatureSample sample)

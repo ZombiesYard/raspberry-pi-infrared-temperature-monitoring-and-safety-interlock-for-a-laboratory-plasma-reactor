@@ -15,7 +15,7 @@ public sealed class HybridG2000InterlockControllerTests
 
         await controller.StopAsync(CancellationToken.None);
 
-        Assert.Equal(["physical-open-all"], events);
+        Assert.Equal(["g2000-latch-Temperature limit trip", "physical-open-all"], events);
     }
 
     [Fact]
@@ -30,6 +30,29 @@ public sealed class HybridG2000InterlockControllerTests
     }
 
     [Fact]
+    public async Task ResetAsync_WhenG2000TripLatched_PreservesRecoveryPolicyUntilReset()
+    {
+        var events = new List<string>();
+        using var controller = new HybridG2000InterlockController(new FakeG2000Controller(events, isTripLatched: true), new FakePhysicalRelay(events));
+
+        await controller.ResetAsync(CancellationToken.None);
+
+        Assert.Equal(["g2000-prepare-recovery", "physical-close-all", "g2000-complete-recovery"], events);
+    }
+
+    [Fact]
+    public async Task StopThenReset_UsesLatchedG2000Recovery()
+    {
+        var events = new List<string>();
+        using var controller = new HybridG2000InterlockController(new FakeG2000Controller(events), new FakePhysicalRelay(events));
+
+        await controller.StopAsync(CancellationToken.None);
+        await controller.ResetAsync(CancellationToken.None);
+
+        Assert.Equal(["g2000-latch-Temperature limit trip", "physical-open-all", "g2000-prepare-recovery", "physical-close-all", "g2000-complete-recovery"], events);
+    }
+
+    [Fact]
     public async Task StartAutomaticSequenceAsync_ForwardsToG2000Only()
     {
         var events = new List<string>();
@@ -40,8 +63,10 @@ public sealed class HybridG2000InterlockControllerTests
         Assert.Equal(["g2000-start-automatic"], events);
     }
 
-    private sealed class FakeG2000Controller(List<string> events) : IG2000Controller
+    private sealed class FakeG2000Controller(List<string> events, bool isTripLatched = false) : IG2000Controller, IG2000TripLatch, IG2000RecoveryPreparation
     {
+        private bool _isTripLatched = isTripLatched;
+
         public event EventHandler<G2000TelemetrySnapshot>? TelemetryUpdated
         {
             add { }
@@ -53,7 +78,23 @@ public sealed class HybridG2000InterlockControllerTests
         public G2000StartupRecipe StartupRecipe { get; } = new();
         public TripRecoveryPolicy RecoveryPolicy { get; set; }
         public G2000UiMode UiMode { get; set; }
-        public bool IsTripLatched => false;
+        public bool IsTripLatched => _isTripLatched;
+        public void LatchSoftwareTrip(string reason)
+        {
+            _isTripLatched = true;
+            events.Add($"g2000-latch-{reason}");
+        }
+        public Task PrepareRecoveryWhileInterlockOpenAsync(CancellationToken cancellationToken)
+        {
+            _isTripLatched = false;
+            events.Add("g2000-prepare-recovery");
+            return Task.CompletedTask;
+        }
+        public Task CompletePreparedRecoveryAfterInterlockClosedAsync(CancellationToken cancellationToken)
+        {
+            events.Add("g2000-complete-recovery");
+            return Task.CompletedTask;
+        }
         public Task EnsureConnectedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SetHvStateAsync(G2000HvState state, CancellationToken cancellationToken)
         {

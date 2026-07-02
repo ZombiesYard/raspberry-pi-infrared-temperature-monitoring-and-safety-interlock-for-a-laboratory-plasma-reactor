@@ -5,7 +5,7 @@ using ReactorSoftInterlock.Infrastructure.Settings;
 
 namespace ReactorSoftInterlock.Infrastructure.Relay;
 
-public sealed class G2000CanController : IG2000Controller
+public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG2000RecoveryPreparation
 {
     private readonly G2000CanSettings _settings;
     private readonly IPcanBus _pcanBus;
@@ -35,6 +35,9 @@ public sealed class G2000CanController : IG2000Controller
     private bool _autoRecoverAfterFaultClear;
     private string _automaticStageLabel = "Idle";
     private DateTimeOffset? _pendingHvOnAt;
+    private G2000StartupRecipe? _preparedRecoveryRecipe;
+    private G2000HvState? _preparedRecoveryHvState;
+    private bool _recoveryPreparationPending;
 
     public G2000CanController(G2000CanSettings settings)
         : this(settings, new NativePcanBus(), static () => DateTimeOffset.Now, startBackgroundLoops: true)
@@ -194,12 +197,91 @@ public sealed class G2000CanController : IG2000Controller
         {
             await RecoverFromTripAsync(cancellationToken).ConfigureAwait(false);
         }
+        else if (IsAutomaticSequenceActive())
+        {
+            return RelayAction.ResetSent;
+        }
         else
         {
             await SetHvStateInternalAsync(G2000HvState.HvReady, cancellationToken, switchToManualMode: true, clearTrip: true).ConfigureAwait(false);
         }
 
         return RelayAction.ResetSent;
+    }
+
+    public void LatchSoftwareTrip(string reason)
+    {
+        lock (_sync)
+        {
+            LatchTripLocked(reason, autoRecoverAfterFaultClear: false, forceHvAus: false);
+        }
+
+        PublishTelemetry();
+    }
+
+    public async Task PrepareRecoveryWhileInterlockOpenAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        EnsureInitialized();
+        EnsureLoops();
+
+        lock (_sync)
+        {
+            if (!_tripLatched)
+            {
+                return;
+            }
+
+            var decision = G2000RecoveryPlanner.Plan(_recoveryPolicy, _preTripState);
+            ApplyRecoveryDecisionLocked(decision, deferAutomaticStart: true);
+        }
+
+        await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+        PublishTelemetry();
+    }
+
+    public async Task CompletePreparedRecoveryAfterInterlockClosedAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var shouldSend = false;
+        lock (_sync)
+        {
+            if (_preparedRecoveryRecipe is not null)
+            {
+                var recipe = _preparedRecoveryRecipe.Clone();
+                _preparedRecoveryRecipe = null;
+                _preparedRecoveryHvState = null;
+                StartAutomaticSequenceLocked(recipe, _now(), clearTrip: true, forceHvReadyBeforeHvOn: true);
+                shouldSend = true;
+            }
+            else if (_preparedRecoveryHvState is { } hvState)
+            {
+                _preparedRecoveryHvState = null;
+                _tripLatched = false;
+                _tripReason = string.Empty;
+                _autoRecoverAfterFaultClear = false;
+                _recoveryPreparationPending = false;
+                _targetHvState = hvState;
+                _automaticStageLabel = "Manual";
+                UpdateSnapshotLocked();
+                shouldSend = true;
+            }
+            else if (_recoveryPreparationPending)
+            {
+                _tripLatched = false;
+                _tripReason = string.Empty;
+                _autoRecoverAfterFaultClear = false;
+                _recoveryPreparationPending = false;
+                UpdateSnapshotLocked();
+                shouldSend = true;
+            }
+        }
+
+        if (shouldSend)
+        {
+            await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+            PublishTelemetry();
+        }
     }
 
     public async Task<RelayAction> TestStopAsync(CancellationToken cancellationToken)
@@ -261,41 +343,8 @@ public sealed class G2000CanController : IG2000Controller
 
         lock (_sync)
         {
-            _startupRecipe = recipe.Clone();
             var now = _now();
-            _uiMode = G2000UiMode.Automatic;
-            _tripLatched = false;
-            _tripReason = string.Empty;
-            _autoRecoverAfterFaultClear = false;
-            _automaticStageLabel = "Stage1";
-            _targetSetpoints.VoltageV = _startupRecipe.Stage1VoltageV;
-            _setpointsDirty = true;
-            _pendingHvOnAt = null;
-            if (_startupRecipe.EnterHvReadyBeforeRun)
-            {
-                _targetHvState = G2000HvState.HvReady;
-                if (_startupRecipe.EnterHvOnAtStart)
-                {
-                    _automaticSequence = null;
-                    _pendingHvOnAt = now.AddMilliseconds(_settings.HvReadyLeadTimeMs);
-                    _automaticStageLabel = "ReadyLead";
-                }
-                else
-                {
-                    _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
-                }
-            }
-            else if (_startupRecipe.EnterHvOnAtStart)
-            {
-                _targetHvState = G2000HvState.HvOn;
-                _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
-            }
-            else
-            {
-                _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
-            }
-
-            UpdateSnapshotLocked();
+            StartAutomaticSequenceLocked(recipe, now, clearTrip: true);
         }
 
         await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
@@ -308,6 +357,9 @@ public sealed class G2000CanController : IG2000Controller
         {
             _automaticSequence = null;
             _pendingHvOnAt = null;
+            _preparedRecoveryRecipe = null;
+            _preparedRecoveryHvState = null;
+            _recoveryPreparationPending = false;
             _targetHvState = G2000HvState.HvAus;
             _uiMode = G2000UiMode.Manual;
             _automaticStageLabel = "Stopped";
@@ -606,47 +658,126 @@ public sealed class G2000CanController : IG2000Controller
 
     private async Task RecoverFromTripAsync(CancellationToken cancellationToken)
     {
-        G2000RecoveryDecision decision;
         lock (_sync)
         {
-            decision = G2000RecoveryPlanner.Plan(_recoveryPolicy, _preTripState);
-            _tripLatched = false;
-            _tripReason = string.Empty;
-            _autoRecoverAfterFaultClear = false;
-            _automaticSequence = null;
-            _uiMode = decision.UiMode;
-            _targetHvState = decision.HvState;
-            _targetSetpoints.VoltageV = decision.Setpoints.VoltageV;
-            _targetSetpoints.FrequencyKhz = decision.Setpoints.FrequencyKhz;
-            _targetSetpoints.DutyPercent = decision.Setpoints.DutyPercent;
-            _targetSetpoints.TonMs = decision.Setpoints.TonMs;
-            _targetSetpoints.ToffMs = decision.Setpoints.ToffMs;
-            _startupRecipe = decision.Recipe.Clone();
-            _setpointsDirty = true;
-            _automaticStageLabel = decision.AutomaticStage;
-
-            if (decision.ResumeAutomaticSequence)
-            {
-                if (string.Equals(decision.AutomaticStage, "Stage2", StringComparison.OrdinalIgnoreCase))
-                {
-                    _uiMode = G2000UiMode.Automatic;
-                    _targetSetpoints.VoltageV = _startupRecipe.Stage2VoltageV;
-                    _automaticStageLabel = "Stage2";
-                }
-                else
-                {
-                    _uiMode = G2000UiMode.Automatic;
-                    _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, _now());
-                    _targetSetpoints.VoltageV = _startupRecipe.Stage1VoltageV;
-                    _automaticStageLabel = "Stage1";
-                }
-            }
-
-            UpdateSnapshotLocked();
+            var decision = G2000RecoveryPlanner.Plan(_recoveryPolicy, _preTripState);
+            ApplyRecoveryDecisionLocked(decision, deferAutomaticStart: false);
         }
 
         await SendCurrentStateAsync(cancellationToken).ConfigureAwait(false);
         PublishTelemetry();
+    }
+
+    private void ApplyRecoveryDecisionLocked(G2000RecoveryDecision decision, bool deferAutomaticStart)
+    {
+        if (decision.ResumeAutomaticSequence)
+        {
+            _targetSetpoints.FrequencyKhz = decision.Setpoints.FrequencyKhz;
+            _targetSetpoints.DutyPercent = decision.Setpoints.DutyPercent;
+            _targetSetpoints.TonMs = decision.Setpoints.TonMs;
+            _targetSetpoints.ToffMs = decision.Setpoints.ToffMs;
+            if (deferAutomaticStart)
+            {
+                _autoRecoverAfterFaultClear = false;
+                _automaticSequence = null;
+                _pendingHvOnAt = null;
+                _preparedRecoveryRecipe = decision.Recipe.Clone();
+                _preparedRecoveryHvState = null;
+                _recoveryPreparationPending = true;
+                _startupRecipe = decision.Recipe.Clone();
+                _uiMode = G2000UiMode.Automatic;
+                _targetHvState = G2000HvState.HvReady;
+                _targetSetpoints.VoltageV = _startupRecipe.Stage1VoltageV;
+                _setpointsDirty = true;
+                _automaticStageLabel = "ReadyLead";
+                UpdateSnapshotLocked();
+            }
+            else
+            {
+                _preparedRecoveryRecipe = null;
+                _preparedRecoveryHvState = null;
+                _recoveryPreparationPending = false;
+                StartAutomaticSequenceLocked(decision.Recipe, _now(), clearTrip: true, forceHvReadyBeforeHvOn: true);
+            }
+
+            return;
+        }
+
+        if (!deferAutomaticStart)
+        {
+            _tripLatched = false;
+            _tripReason = string.Empty;
+        }
+
+        _autoRecoverAfterFaultClear = false;
+        _automaticSequence = null;
+        _pendingHvOnAt = null;
+        _preparedRecoveryRecipe = null;
+        _recoveryPreparationPending = deferAutomaticStart;
+        _preparedRecoveryHvState = deferAutomaticStart && decision.HvState == G2000HvState.HvOn
+            ? G2000HvState.HvOn
+            : null;
+        _uiMode = decision.UiMode;
+        _targetHvState = _preparedRecoveryHvState is null ? decision.HvState : G2000HvState.HvReady;
+        _targetSetpoints.VoltageV = decision.Setpoints.VoltageV;
+        _targetSetpoints.FrequencyKhz = decision.Setpoints.FrequencyKhz;
+        _targetSetpoints.DutyPercent = decision.Setpoints.DutyPercent;
+        _targetSetpoints.TonMs = decision.Setpoints.TonMs;
+        _targetSetpoints.ToffMs = decision.Setpoints.ToffMs;
+        _startupRecipe = decision.Recipe.Clone();
+        _setpointsDirty = true;
+        _automaticStageLabel = _preparedRecoveryHvState is null ? decision.AutomaticStage : "PreparedRecovery";
+        UpdateSnapshotLocked();
+    }
+
+    private void StartAutomaticSequenceLocked(
+        G2000StartupRecipe recipe,
+        DateTimeOffset now,
+        bool clearTrip,
+        bool forceHvReadyBeforeHvOn = false)
+    {
+        _startupRecipe = recipe.Clone();
+        _uiMode = G2000UiMode.Automatic;
+        _preparedRecoveryRecipe = null;
+        _preparedRecoveryHvState = null;
+        _recoveryPreparationPending = false;
+        if (clearTrip)
+        {
+            _tripLatched = false;
+            _tripReason = string.Empty;
+        }
+
+        _autoRecoverAfterFaultClear = false;
+        _automaticStageLabel = "Stage1";
+        _targetSetpoints.VoltageV = _startupRecipe.Stage1VoltageV;
+        _setpointsDirty = true;
+        _pendingHvOnAt = null;
+        var enterHvReadyBeforeRun = _startupRecipe.EnterHvReadyBeforeRun || forceHvReadyBeforeHvOn;
+        if (enterHvReadyBeforeRun)
+        {
+            _targetHvState = G2000HvState.HvReady;
+            if (_startupRecipe.EnterHvOnAtStart)
+            {
+                _automaticSequence = null;
+                _pendingHvOnAt = now.AddMilliseconds(_settings.HvReadyLeadTimeMs);
+                _automaticStageLabel = "ReadyLead";
+            }
+            else
+            {
+                _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
+            }
+        }
+        else if (_startupRecipe.EnterHvOnAtStart)
+        {
+            _targetHvState = G2000HvState.HvOn;
+            _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
+        }
+        else
+        {
+            _automaticSequence = new G2000AutomaticSequenceState(_startupRecipe, now);
+        }
+
+        UpdateSnapshotLocked();
     }
 
     private async Task SetHvStateInternalAsync(G2000HvState state, CancellationToken cancellationToken, bool switchToManualMode, bool clearTrip)
@@ -654,6 +785,9 @@ public sealed class G2000CanController : IG2000Controller
         lock (_sync)
         {
             _pendingHvOnAt = null;
+            _preparedRecoveryRecipe = null;
+            _preparedRecoveryHvState = null;
+            _recoveryPreparationPending = false;
             if (state == G2000HvState.HvOn &&
                 !_snapshot.HvEnable &&
                 _settings.HvReadyLeadTimeMs > 0)
@@ -760,7 +894,18 @@ public sealed class G2000CanController : IG2000Controller
         };
     }
 
-    private void LatchTripLocked(string reason, bool autoRecoverAfterFaultClear)
+    private bool IsAutomaticSequenceActive()
+    {
+        lock (_sync)
+        {
+            return _uiMode == G2000UiMode.Automatic &&
+                   (_automaticSequence is not null ||
+                    _pendingHvOnAt is not null ||
+                    _automaticStageLabel is "ReadyLead" or "Stage1" or "Stage2");
+        }
+    }
+
+    private void LatchTripLocked(string reason, bool autoRecoverAfterFaultClear, bool forceHvAus = true)
     {
         if (!_tripLatched)
         {
@@ -769,7 +914,7 @@ public sealed class G2000CanController : IG2000Controller
                 HvState = _targetHvState,
                 Setpoints = _targetSetpoints.Clone(),
                 UiMode = _uiMode,
-                AutomaticSequenceActive = _automaticSequence is not null,
+                AutomaticSequenceActive = _automaticSequence is not null || _pendingHvOnAt is not null || _uiMode == G2000UiMode.Automatic,
                 AutomaticStage = _automaticSequence?.CurrentStage ?? _snapshot.AutomaticStage,
                 Recipe = _startupRecipe.Clone()
             };
@@ -780,7 +925,14 @@ public sealed class G2000CanController : IG2000Controller
         _autoRecoverAfterFaultClear = autoRecoverAfterFaultClear;
         _automaticSequence = null;
         _uiMode = G2000UiMode.Manual;
-        _targetHvState = G2000HvState.HvAus;
+        _preparedRecoveryRecipe = null;
+        _preparedRecoveryHvState = null;
+        _recoveryPreparationPending = false;
+        if (forceHvAus)
+        {
+            _targetHvState = G2000HvState.HvAus;
+        }
+
         _pendingHvOnAt = null;
         _automaticStageLabel = "Tripped";
         UpdateSnapshotLocked();
