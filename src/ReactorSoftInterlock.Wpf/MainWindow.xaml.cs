@@ -165,6 +165,12 @@ public partial class MainWindow : Window
             await SaveSettingsFromUiAsync();
             var capture = new WindowCapture();
             var windowBounds = capture.GetWindowBounds(_settings.WindowTitleContains);
+            if (!capture.BringWindowToForeground(_settings.WindowTitleContains))
+            {
+                ShowSetupWarning(T("message.hikmicroForegroundFailed"));
+                return;
+            }
+
             var selector = new RoiSelectorWindow(windowBounds) { Owner = this };
             if (selector.ShowDialog() != true || selector.SelectedRect is null)
             {

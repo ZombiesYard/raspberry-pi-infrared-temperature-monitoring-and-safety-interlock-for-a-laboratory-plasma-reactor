@@ -30,6 +30,10 @@ public sealed class TesseractCliTemperatureReader : ITemperatureReader
             var rawText = await RunTesseractAsync(image.Path, cancellationToken).ConfigureAwait(false);
             return new TemperatureReading(_parser.ParseHighestTemperatureC(rawText), rawText.Trim(), image.RoiDescription);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return new TemperatureReading(null, ex.Message, image?.RoiDescription ?? _settings.Roi.ToString());
