@@ -10,6 +10,9 @@ namespace ReactorSoftInterlock.Infrastructure.Capture;
 [SupportedOSPlatform("windows6.1")]
 public sealed class WindowCapture
 {
+    private const int RoiEdgeTolerancePixels = 8;
+    private const double MinimumRetainedRoiRatio = 0.80;
+
     public WindowBounds GetWindowBounds(string titleContains)
     {
         var handle = FindWindow(titleContains);
@@ -81,15 +84,46 @@ public sealed class WindowCapture
             throw new InvalidOperationException("Target window has no capturable area.");
         }
 
-        if (roi.X < 0 ||
-            roi.Y < 0 ||
-            roi.X + roi.Width > windowWidth ||
-            roi.Y + roi.Height > windowHeight)
+        var left = roi.X;
+        var top = roi.Y;
+        var right = roi.X + roi.Width;
+        var bottom = roi.Y + roi.Height;
+
+        var isClearlyOutside =
+            left < -RoiEdgeTolerancePixels ||
+            top < -RoiEdgeTolerancePixels ||
+            right > windowWidth + RoiEdgeTolerancePixels ||
+            bottom > windowHeight + RoiEdgeTolerancePixels;
+        if (isClearlyOutside)
         {
             throw new InvalidOperationException("ROI no longer fits inside the current HikmicroAnalyzer window. Select ROI again.");
         }
 
-        return new Rectangle(roi.X, roi.Y, roi.Width, roi.Height);
+        var clampedLeft = Math.Clamp(left, 0, windowWidth);
+        var clampedTop = Math.Clamp(top, 0, windowHeight);
+        var clampedRight = Math.Clamp(right, 0, windowWidth);
+        var clampedBottom = Math.Clamp(bottom, 0, windowHeight);
+        var clampedWidth = clampedRight - clampedLeft;
+        var clampedHeight = clampedBottom - clampedTop;
+        if (clampedWidth < 1 ||
+            clampedHeight < 1 ||
+            IsTooMuchOfRoiClipped(clampedWidth, roi.Width) ||
+            IsTooMuchOfRoiClipped(clampedHeight, roi.Height))
+        {
+            throw new InvalidOperationException("ROI no longer fits inside the current HikmicroAnalyzer window. Select ROI again.");
+        }
+
+        return new Rectangle(clampedLeft, clampedTop, clampedWidth, clampedHeight);
+    }
+
+    private static bool IsTooMuchOfRoiClipped(int clampedLength, int configuredLength)
+    {
+        if (configuredLength <= 0)
+        {
+            return true;
+        }
+
+        return clampedLength < Math.Ceiling(configuredLength * MinimumRetainedRoiRatio);
     }
 
     private static Bitmap? CaptureWindowRoi(IntPtr handle, Rectangle roi, int windowWidth, int windowHeight)

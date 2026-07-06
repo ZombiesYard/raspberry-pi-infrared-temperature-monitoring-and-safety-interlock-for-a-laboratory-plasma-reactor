@@ -50,6 +50,8 @@ public partial class MainWindow : Window
     private bool _isRefreshingGasFlow;
     private bool _g2000CombinedStartInProgress;
     private bool _stopG2000AutomaticOnMonitoringFailure;
+    private double _monitorLeftScrollOffset;
+    private bool _isRestoringMonitorLeftScroll;
 
     public MainWindow()
     {
@@ -1407,6 +1409,54 @@ public partial class MainWindow : Window
     private void TemperatureChartCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         DrawTemperatureChart();
+    }
+
+    private void MonitorLeftScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (MonitorLeftScrollViewer is null || _isRestoringMonitorLeftScroll)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(MainTabControl.SelectedItem, MonitorTab))
+        {
+            return;
+        }
+
+        _monitorLeftScrollOffset = e.VerticalOffset;
+    }
+
+    private void MainTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (MonitorLeftScrollViewer is null || !ReferenceEquals(e.OriginalSource, MainTabControl))
+        {
+            return;
+        }
+
+        if (e.RemovedItems.Contains(MonitorTab))
+        {
+            _monitorLeftScrollOffset = MonitorLeftScrollViewer.VerticalOffset;
+        }
+
+        if (!e.AddedItems.Contains(MonitorTab))
+        {
+            return;
+        }
+
+        var offsetToRestore = _monitorLeftScrollOffset;
+        _isRestoringMonitorLeftScroll = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                var offset = Math.Min(offsetToRestore, MonitorLeftScrollViewer.ScrollableHeight);
+                MonitorLeftScrollViewer.ScrollToVerticalOffset(Math.Max(0, offset));
+            }
+            finally
+            {
+                _isRestoringMonitorLeftScroll = false;
+            }
+        }), DispatcherPriority.Loaded);
     }
 
     private void G2000SettingsInput_Changed(object sender, RoutedEventArgs e)
