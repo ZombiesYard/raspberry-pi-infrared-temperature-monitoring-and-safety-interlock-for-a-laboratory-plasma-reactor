@@ -22,7 +22,8 @@
              FontFamily="Consolas"
              FontSize="13" />
 
-    <Button Grid.Row="1"
+    <Button x:Name="CloseButtonControl"
+            Grid.Row="1"
             Content="Close"
             Width="100"
             HorizontalAlignment="Right"

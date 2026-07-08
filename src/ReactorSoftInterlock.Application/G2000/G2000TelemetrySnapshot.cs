@@ -28,7 +28,13 @@ public sealed class G2000TelemetrySnapshot
 
     public double? DcLinkVoltageV { get; set; }
 
+    public double? ReservedDcLinkCurrentA { get; set; }
+
     public double? DcLinkAuxValue { get; set; }
+
+    public double? ReservedOutputVoltageV { get; set; }
+
+    public double? ReservedOutputCurrentA { get; set; }
 
     public double? FrequencyKhz { get; set; }
 
@@ -78,7 +84,10 @@ public sealed class G2000TelemetrySnapshot
             ErrorCode = ErrorCode,
             ErrorText = ErrorText,
             DcLinkVoltageV = DcLinkVoltageV,
+            ReservedDcLinkCurrentA = ReservedDcLinkCurrentA,
             DcLinkAuxValue = DcLinkAuxValue,
+            ReservedOutputVoltageV = ReservedOutputVoltageV,
+            ReservedOutputCurrentA = ReservedOutputCurrentA,
             FrequencyKhz = FrequencyKhz,
             DutyPercent = DutyPercent,
             TonMs = TonMs,

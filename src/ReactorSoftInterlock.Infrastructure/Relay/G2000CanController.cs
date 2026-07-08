@@ -178,6 +178,11 @@ public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG20
         UpdateCommunicationHealth();
     }
 
+    internal Task HandleIncomingMessageForTestAsync(uint id, byte[] data, CancellationToken cancellationToken)
+    {
+        return HandleIncomingMessageAsync(id, data, cancellationToken);
+    }
+
     public async Task<RelayAction> StopAsync(CancellationToken cancellationToken)
     {
         await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
@@ -546,9 +551,10 @@ public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG20
                 }
                 case var dcLinkId when dcLinkId == G2000CanProtocol.GetDcLinkActualId(_settings.NodeId):
                 {
-                    var (voltage, auxiliary) = G2000CanProtocol.ParseTwoFloatFrame(data);
+                    var (voltage, current) = G2000CanProtocol.ParseTwoFloatFrame(data);
                     _snapshot.DcLinkVoltageV = voltage;
-                    _snapshot.DcLinkAuxValue = auxiliary;
+                    _snapshot.ReservedDcLinkCurrentA = current;
+                    _snapshot.DcLinkAuxValue = current;
                     _snapshot.DcLinkActualFrameHex = G2000CanProtocol.FormatFrame(data);
                     _snapshot.ActualSetpoints.VoltageV = voltage;
                     break;
@@ -564,8 +570,13 @@ public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG20
                     break;
                 }
                 case var reservedId when reservedId == G2000CanProtocol.GetReservedActualId(_settings.NodeId):
+                {
+                    var (voltage, current) = G2000CanProtocol.ParseTwoFloatFrame(data);
+                    _snapshot.ReservedOutputVoltageV = voltage;
+                    _snapshot.ReservedOutputCurrentA = current;
                     _snapshot.ReservedActualFrameHex = G2000CanProtocol.FormatFrame(data);
                     break;
+                }
                 case var pulseId when pulseId == G2000CanProtocol.GetPulseActualId(_settings.NodeId):
                 {
                     var (ton, toff) = G2000CanProtocol.ParseTwoFloatFrame(data);

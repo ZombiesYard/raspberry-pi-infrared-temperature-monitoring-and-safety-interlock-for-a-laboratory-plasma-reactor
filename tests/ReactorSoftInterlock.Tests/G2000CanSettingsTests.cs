@@ -6,6 +6,27 @@ namespace ReactorSoftInterlock.Tests;
 public sealed class G2000CanSettingsTests
 {
     [Fact]
+    public void Defaults_RequestSixtyHertzCanReadPolling()
+    {
+        var settings = new G2000CanSettings();
+
+        Assert.Equal(16, settings.ReadPollIntervalMs);
+    }
+
+    [Fact]
+    public void Normalize_RestoresInvalidReadPollIntervalToSixtyHertzDefault()
+    {
+        var settings = new G2000CanSettings
+        {
+            ReadPollIntervalMs = 0
+        };
+
+        settings.Normalize();
+
+        Assert.Equal(16, settings.ReadPollIntervalMs);
+    }
+
+    [Fact]
     public void ValidateWritableSetpoints_AllowsPanelRangeByDefault()
     {
         var settings = new G2000CanSettings

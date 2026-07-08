@@ -10,7 +10,7 @@ public sealed class G2000CanSettings
 
     public int CommandPeriodMs { get; set; } = 100;
 
-    public int ReadPollIntervalMs { get; set; } = 20;
+    public int ReadPollIntervalMs { get; set; } = 16;
 
     public string UiMode { get; set; } = nameof(G2000UiMode.Manual);
 
@@ -56,7 +56,7 @@ public sealed class G2000CanSettings
 
         if (ReadPollIntervalMs <= 0)
         {
-            ReadPollIntervalMs = 20;
+            ReadPollIntervalMs = 16;
         }
 
         if (HvReadyLeadTimeMs < 0)
@@ -109,11 +109,8 @@ public sealed class G2000CanSettings
         {
             throw new InvalidOperationException(
                 $"{name}={value:0.###} V is outside the configured U2 range {DescribeVerifiedU2Window()}. " +
-                $"当前软件允许的 U2 范围是 {DescribeVerifiedU2Window()}。" +
                 " The G2000 manual defines 0x300 as the internal DC-link setpoint U2, not the external HV output voltage. " +
-                "手册说明 0x300 写入的是内部中间回路电压 U2，不是外部高压输出端电压。 " +
-                "Out-of-range U2 writes are blocked unless AllowUnsafeU2Writes is enabled. " +
-                "如需超出这个范围，请在确认接线和负载安全后显式启用 AllowUnsafeU2Writes。");
+                "Out-of-range U2 writes are blocked unless AllowUnsafeU2Writes is enabled.");
         }
     }
 

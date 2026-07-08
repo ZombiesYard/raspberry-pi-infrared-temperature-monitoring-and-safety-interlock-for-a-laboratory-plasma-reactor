@@ -40,6 +40,8 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _monitoringCts;
     private readonly DispatcherTimer _gasFlowTimer = new();
     private double? _lastTemperatureC;
+    private DateTimeOffset? _lastTemperatureSampleAt;
+    private DateTimeOffset? _monitoringStartedAt;
     private double? _lastGasFlowMlMin;
     private MonitorStatus _currentStatus = MonitorStatus.Idle;
     private G2000TelemetrySnapshot _lastG2000Snapshot = new();
@@ -48,8 +50,6 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _branchInterlockGate = new(1, 1);
     private bool _isBindingSettings;
     private bool _isRefreshingGasFlow;
-    private bool _g2000CombinedStartInProgress;
-    private bool _stopG2000AutomaticOnMonitoringFailure;
     private double _monitorLeftScrollOffset;
     private bool _isRestoringMonitorLeftScroll;
 
@@ -126,11 +126,23 @@ public partial class MainWindow : Window
 
     private void InitializeG2000OptionLists()
     {
-        G2000RecoveryPolicyBox.ItemsSource = Enum.GetValues<TripRecoveryPolicy>()
-            .Select(static policy => new EnumOption<TripRecoveryPolicy>(policy, policy.ToString()))
-            .ToList();
         G2000RecoveryPolicyBox.DisplayMemberPath = nameof(EnumOption<TripRecoveryPolicy>.DisplayName);
         G2000RecoveryPolicyBox.SelectedValuePath = nameof(EnumOption<TripRecoveryPolicy>.Value);
+        var wasBindingSettings = _isBindingSettings;
+        _isBindingSettings = true;
+        RefreshG2000RecoveryPolicyOptions();
+        _isBindingSettings = wasBindingSettings;
+    }
+
+    private void RefreshG2000RecoveryPolicyOptions()
+    {
+        var selected = (TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ??
+            _settings?.Relay.G2000Can.ResolveRecoveryPolicy() ??
+            TripRecoveryPolicy.HoldHvAus;
+        G2000RecoveryPolicyBox.ItemsSource = Enum.GetValues<TripRecoveryPolicy>()
+            .Select(policy => new EnumOption<TripRecoveryPolicy>(policy, FormatRecoveryPolicy(policy)))
+            .ToList();
+        G2000RecoveryPolicyBox.SelectedValue = selected;
     }
 
     private async Task InitializeG2000ControllerAsync()
@@ -153,7 +165,7 @@ public partial class MainWindow : Window
         {
             _lastG2000ConnectionError = ex.Message;
             UpdateG2000Telemetry(_g2000Controller.Snapshot);
-            FooterText.Text = $"G2000 CAN not connected: {ex.Message}";
+            FooterText.Text = string.Format(CultureInfo.InvariantCulture, T("footer.g2000CanNotConnected"), ex.Message);
         }
 
         UpdateG2000ModeAvailability();
@@ -329,7 +341,7 @@ public partial class MainWindow : Window
 
     private void OpenGuideButton_Click(object sender, RoutedEventArgs e)
     {
-        var guide = new GuideWindow(T("guide.title"), T("guide.body"))
+        var guide = new GuideWindow(T("guide.title"), T("guide.body"), T("button.close"), T("tooltip.guideText"), T("tooltip.closeGuide"))
         {
             Owner = this
         };
@@ -342,7 +354,7 @@ public partial class MainWindow : Window
         {
             var dialog = new SaveFileDialog
             {
-                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                Filter = T("dialog.csvFilter"),
                 FileName = $"g2000-temperature-history-{DateTime.Now:yyyyMMdd-HHmmss}.csv"
             };
 
@@ -482,7 +494,7 @@ public partial class MainWindow : Window
             }
 
             UpdateG2000Telemetry(controller.Snapshot);
-            FooterText.Text = "G2000 CAN session refreshed.";
+            FooterText.Text = T("footer.g2000Refreshed");
         }
         catch (Exception ex)
         {
@@ -495,7 +507,7 @@ public partial class MainWindow : Window
         await ExecuteG2000Async(async controller =>
         {
             await controller.SetHvStateAsync(G2000HvState.HvAus, CancellationToken.None);
-            FooterText.Text = "G2000 set to HV AUS.";
+            FooterText.Text = T("footer.g2000HvAus");
         });
     }
 
@@ -509,7 +521,7 @@ public partial class MainWindow : Window
             }
 
             await controller.SetHvStateAsync(G2000HvState.HvReady, CancellationToken.None);
-            FooterText.Text = "G2000 set to HV bereit.";
+            FooterText.Text = T("footer.g2000HvReady");
         });
     }
 
@@ -525,8 +537,8 @@ public partial class MainWindow : Window
             var needsLead = !controller.Snapshot.HvEnable && _settings.Relay.G2000Can.HvReadyLeadTimeMs > 0;
             await controller.SetHvStateAsync(G2000HvState.HvOn, CancellationToken.None);
             FooterText.Text = needsLead
-                ? $"HV EIN armed. Holding HV bereit for {_settings.Relay.G2000Can.HvReadyLeadTimeMs} ms first."
-                : "G2000 set to HV EIN.";
+                ? string.Format(CultureInfo.InvariantCulture, T("footer.g2000HvEinArmed"), _settings.Relay.G2000Can.HvReadyLeadTimeMs)
+                : T("footer.g2000HvEin");
         });
     }
 
@@ -534,7 +546,7 @@ public partial class MainWindow : Window
     {
         await ExecuteG2000Async(async controller =>
         {
-            await ApplyG2000WritableSetpointsFromUiAsync(controller, "G2000 U2 / inverter / pulse setpoints applied.");
+            await ApplyG2000WritableSetpointsFromUiAsync(controller, T("footer.g2000SetpointsApplied"));
         });
     }
 
@@ -556,7 +568,7 @@ public partial class MainWindow : Window
             var textBox = GetG2000WritableSetpointBox(parts[0], out var format);
             var current = ParseDouble(textBox.Text, parts[0]);
             textBox.Text = (current + delta).ToString(format, CultureInfo.InvariantCulture);
-            await ApplyG2000WritableSetpointsFromUiAsync(controller, "G2000 setpoint adjusted and applied.");
+            await ApplyG2000WritableSetpointsFromUiAsync(controller, T("footer.g2000SetpointAdjusted"));
         });
     }
 
@@ -564,93 +576,15 @@ public partial class MainWindow : Window
     {
         await ExecuteG2000Async(async controller =>
         {
+            if (!ValidateTemperatureMonitorReadyForG2000Automatic())
+            {
+                return;
+            }
+
             await SaveG2000SettingsFromUiAsync();
             await controller.StartAutomaticSequenceAsync(_settings.Relay.G2000Can.StartupRecipe.Clone(), CancellationToken.None);
-            FooterText.Text = "Automatic G2000 startup recipe started.";
+            FooterText.Text = T("footer.g2000AutomaticStarted");
         });
-    }
-
-    private async void G2000StartAutomaticAndMonitorButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_g2000CombinedStartInProgress)
-        {
-            FooterText.Text = "G2000 automatic + temperature monitoring start is already in progress.";
-            return;
-        }
-
-        try
-        {
-            _g2000CombinedStartInProgress = true;
-            if (_monitoringCts is not null)
-            {
-                FooterText.Text = "Temperature monitoring is already running. Use the G2000 controls separately.";
-                return;
-            }
-
-            await SaveSettingsFromUiAsync();
-            if (!ValidateMonitoringSetup())
-            {
-                return;
-            }
-
-            await RebuildServicesPreservingG2000Async();
-            var controller = await EnsureG2000ControlAsync();
-            if (controller is null)
-            {
-                return;
-            }
-
-            var firstSample = await _monitoringService!.PollOnceAsync(CancellationToken.None);
-            if (firstSample.TemperatureC is null)
-            {
-                FooterText.Text = "G2000 automatic was not started because OCR did not return a valid temperature.";
-                return;
-            }
-
-            if (_stateMachine.IsTripped)
-            {
-                FooterText.Text = "G2000 automatic was not started because the temperature monitor is tripped.";
-                return;
-            }
-
-            _stopG2000AutomaticOnMonitoringFailure = true;
-            StartMonitoringLoop("Temperature monitoring started; starting G2000 automatic recipe.");
-            if (_monitoringCts is null || !_stopG2000AutomaticOnMonitoringFailure)
-            {
-                throw new InvalidOperationException("Temperature monitoring stopped before G2000 automatic could start.");
-            }
-
-            try
-            {
-                await controller.StartAutomaticSequenceAsync(_settings.Relay.G2000Can.StartupRecipe.Clone(), CancellationToken.None);
-            }
-            catch (Exception startEx)
-            {
-                Exception error = startEx;
-                try
-                {
-                    await controller.StopAutomaticSequenceAsync(CancellationToken.None);
-                }
-                catch (Exception stopEx)
-                {
-                    error = new AggregateException("G2000 automatic did not start, and stopping it also failed.", startEx, stopEx);
-                }
-
-                StopMonitoring("G2000 automatic did not start; temperature monitoring stopped.");
-                throw error;
-            }
-
-            UpdateG2000Telemetry(controller.Snapshot);
-            FooterText.Text = "G2000 two-stage recipe and temperature monitoring started.";
-        }
-        catch (Exception ex)
-        {
-            ShowError(ex);
-        }
-        finally
-        {
-            _g2000CombinedStartInProgress = false;
-        }
     }
 
     private async void G2000StopAutomaticButton_Click(object sender, RoutedEventArgs e)
@@ -658,7 +592,7 @@ public partial class MainWindow : Window
         await ExecuteG2000Async(async controller =>
         {
             await controller.StopAutomaticSequenceAsync(CancellationToken.None);
-            FooterText.Text = "Automatic G2000 recipe stopped.";
+            FooterText.Text = T("footer.g2000AutomaticStopped");
         });
     }
 
@@ -858,7 +792,7 @@ public partial class MainWindow : Window
     {
         if (_settings.Relay.ResolveMode() != RelayControllerMode.G2000Can)
         {
-            ShowSetupWarning("Relay.Mode must be G2000Can before using the G2000 software console.");
+            ShowSetupWarning(T("message.g2000ModeRequired"));
             return null;
         }
 
@@ -871,7 +805,7 @@ public partial class MainWindow : Window
         {
             if (_monitoringCts is not null)
             {
-                ShowSetupWarning("G2000 controller is not available. Save settings and restart monitoring once. G2000 控制器当前不可用，请保存设置并重启一次监控。");
+                ShowSetupWarning(T("message.g2000Unavailable"));
                 return null;
             }
 
@@ -913,25 +847,51 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Exception error = ex;
-            if (_stopG2000AutomaticOnMonitoringFailure && _g2000Controller is not null)
-            {
-                try
-                {
-                    await _g2000Controller.StopAutomaticSequenceAsync(CancellationToken.None);
-                }
-                catch (Exception stopEx)
-                {
-                    error = new AggregateException("Temperature monitoring failed, and stopping G2000 automatic also failed.", ex, stopEx);
-                }
-            }
-
             Dispatcher.Invoke(() =>
             {
                 StopMonitoring(T("footer.monitoringStopped"));
-                ShowError(error);
+                ShowError(ex);
             });
         }
+    }
+
+    private bool ValidateTemperatureMonitorReadyForG2000Automatic()
+    {
+        if (_monitoringCts is null)
+        {
+            ShowSetupWarning(T("message.g2000AutomaticNeedsTemperatureMonitor"));
+            return false;
+        }
+
+        if (_currentStatus == MonitorStatus.Tripped || _stateMachine.IsTripped)
+        {
+            ShowSetupWarning(T("message.g2000AutomaticBlockedByTrip"));
+            return false;
+        }
+
+        if (_currentStatus != MonitorStatus.Monitoring ||
+            _lastTemperatureC is null ||
+            _lastTemperatureSampleAt is null ||
+            _monitoringStartedAt is null)
+        {
+            ShowSetupWarning(T("message.g2000AutomaticNeedsValidTemperature"));
+            return false;
+        }
+
+        if (_lastTemperatureSampleAt.Value < _monitoringStartedAt.Value)
+        {
+            ShowSetupWarning(T("message.g2000AutomaticNeedsFreshTemperature"));
+            return false;
+        }
+
+        var maxSampleAge = TimeSpan.FromMilliseconds(Math.Max(5000, _settings.PollIntervalMs * 3));
+        if (DateTimeOffset.Now - _lastTemperatureSampleAt.Value > maxSampleAge)
+        {
+            ShowSetupWarning(T("message.g2000AutomaticNeedsFreshTemperature"));
+            return false;
+        }
+
+        return true;
     }
 
     private bool ValidateMonitoringSetup()
@@ -950,7 +910,7 @@ public partial class MainWindow : Window
 
         if (_settings.PollIntervalMs <= 0)
         {
-            ShowSetupWarning("Poll interval must be a positive number of milliseconds.");
+            ShowSetupWarning(T("message.pollIntervalInvalid"));
             return false;
         }
 
@@ -971,7 +931,7 @@ public partial class MainWindow : Window
 
         if (_settings.Relay.ResolveMode() == RelayControllerMode.G2000Can && _settings.Relay.DryRun)
         {
-            ShowSetupWarning("G2000 temperature monitoring requires the physical interlock relay. Disable Dry Run before live monitoring. G2000 温度监控需要真实物理 Interlock 继电器，正式监控前请关闭 Dry Run。");
+            ShowSetupWarning(T("message.g2000LiveMonitoringNeedsRelay"));
             return false;
         }
 
@@ -1033,7 +993,7 @@ public partial class MainWindow : Window
     {
         if (_settings.Relay.DryRun)
         {
-            ShowSetupWarning("Physical branch interlock relay is still in Dry Run. Disable Dry Run and select the relay COM port before opening/closing branch interlocks or starting live monitoring. 物理 Branch Interlock 继电器仍处于 Dry Run，请关闭 Dry Run 并选择继电器串口后再断开/闭合或启动正式监控。");
+            ShowSetupWarning(T("message.branchRelayDryRun"));
             return false;
         }
 
@@ -1080,25 +1040,25 @@ public partial class MainWindow : Window
     {
         if (!PcanChannelParser.TryParse(_settings.Relay.G2000Can.Channel, out _))
         {
-            ShowSetupWarning("G2000 CAN channel must look like UsbBus1, UsbBus2, or PCAN_USBBUS1.");
+            ShowSetupWarning(T("message.g2000CanChannelInvalid"));
             return false;
         }
 
         if (_settings.Relay.G2000Can.NodeId > 0x7E)
         {
-            ShowSetupWarning("G2000 CAN node ID must be in the range 0x00..0x7E.");
+            ShowSetupWarning(T("message.g2000NodeInvalid"));
             return false;
         }
 
         if (_settings.Relay.G2000Can.CommandPeriodMs <= 0)
         {
-            ShowSetupWarning("G2000 CAN command period must be a positive number of milliseconds.");
+            ShowSetupWarning(T("message.g2000CommandPeriodInvalid"));
             return false;
         }
 
         if (_settings.Relay.G2000Can.ReadPollIntervalMs <= 0)
         {
-            ShowSetupWarning("G2000 CAN read poll interval must be a positive number of milliseconds.");
+            ShowSetupWarning(T("message.g2000ReadPollInvalid"));
             return false;
         }
 
@@ -1128,6 +1088,7 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() =>
         {
             _lastTemperatureC = sample.TemperatureC;
+            _lastTemperatureSampleAt = sample.Timestamp;
             _history.Insert(0, sample);
             while (_history.Count > 500)
             {
@@ -1135,9 +1096,9 @@ public partial class MainWindow : Window
             }
 
             TemperatureText.Text = sample.TemperatureC is null
-                ? "NO READING"
+                ? T("status.NoReading").ToUpperInvariant()
                 : $"{sample.TemperatureC.Value:0.0} C";
-            RawOcrText.Text = string.IsNullOrWhiteSpace(sample.RawOcrText) ? "(empty OCR text)" : sample.RawOcrText;
+            RawOcrText.Text = string.IsNullOrWhiteSpace(sample.RawOcrText) ? T("ocr.empty") : sample.RawOcrText;
             SetStatus(sample.Status);
             AlarmReasonText.Text = sample.AlarmReason;
 
@@ -1172,21 +1133,19 @@ public partial class MainWindow : Window
         var isCanMode = settings.Relay.ResolveMode() == RelayControllerMode.G2000Can;
         G2000ConnectionText.Text = isCanMode
             ? snapshot.Connected
-                ? snapshot.CommunicationHealthy ? "Connected / healthy" : "Connected / waiting for fresh frames"
+                ? snapshot.CommunicationHealthy ? T("g2000.connectionHealthy") : T("g2000.connectionWaiting")
                 : string.IsNullOrWhiteSpace(_lastG2000ConnectionError)
-                    ? $"Not connected ({settings.Relay.G2000Can.Channel})"
-                    : $"Not connected ({settings.Relay.G2000Can.Channel}): {_lastG2000ConnectionError}"
-            : $"Disabled by Relay.Mode={settings.Relay.Mode}";
+                    ? string.Format(CultureInfo.InvariantCulture, T("g2000.notConnected"), settings.Relay.G2000Can.Channel)
+                    : string.Format(CultureInfo.InvariantCulture, T("g2000.notConnectedWithError"), settings.Relay.G2000Can.Channel, _lastG2000ConnectionError)
+            : string.Format(CultureInfo.InvariantCulture, T("g2000.disabledByRelayMode"), settings.Relay.Mode);
         G2000DiagnosticStatusText.Text = G2000ConnectionText.Text;
-        G2000SourceText.Text = $"{snapshot.Source} / {DescribeG2000HvState(snapshot)}";
-        G2000FaultText.Text = snapshot.Fault
-            ? $"{snapshot.ErrorText} (0x{snapshot.ErrorCode:X2})"
-            : "No fault";
+        G2000SourceText.Text = $"{FormatG2000ControlSource(snapshot.Source)} / {DescribeG2000HvState(snapshot)}";
+        G2000FaultText.Text = FormatG2000Fault(snapshot);
         G2000TripText.Text = snapshot.TripLatched
-            ? snapshot.TripReason
-            : "No latched trip";
-        G2000ModeText.Text = snapshot.UiMode.ToString();
-        G2000AutoStageText.Text = snapshot.AutomaticStage;
+            ? FormatG2000TripReason(snapshot.TripReason)
+            : T("g2000.noLatchedTrip");
+        G2000ModeText.Text = FormatG2000UiMode(snapshot.UiMode);
+        G2000AutoStageText.Text = FormatG2000Stage(snapshot.AutomaticStage);
 
         G2000TargetVoltageText.Text = snapshot.TargetSetpoints.VoltageV.ToString("0.0", CultureInfo.InvariantCulture);
         G2000TargetFrequencyText.Text = snapshot.TargetSetpoints.FrequencyKhz.ToString("0.0", CultureInfo.InvariantCulture);
@@ -1194,11 +1153,13 @@ public partial class MainWindow : Window
         G2000TargetTonText.Text = snapshot.TargetSetpoints.TonMs.ToString("0.000", CultureInfo.InvariantCulture);
         G2000TargetToffText.Text = snapshot.TargetSetpoints.ToffMs.ToString("0.000", CultureInfo.InvariantCulture);
         G2000ActualVoltageText.Text = FormatNullableDouble(snapshot.DcLinkVoltageV, "0.000");
+        G2000ActualDcLinkCurrentText.Text = FormatNullableDouble(snapshot.ReservedDcLinkCurrentA, "0.000");
         G2000ActualFrequencyText.Text = FormatNullableDouble(snapshot.FrequencyKhz, "0.000");
         G2000ActualDutyText.Text = FormatNullableDouble(snapshot.DutyPercent, "0.000");
         G2000ActualTonText.Text = FormatNullableDouble(snapshot.TonMs, "0.000");
         G2000ActualToffText.Text = FormatNullableDouble(snapshot.ToffMs, "0.000");
-        G2000ActualAuxText.Text = FormatNullableDouble(snapshot.DcLinkAuxValue, "0.000");
+        G2000ReservedOutputVoltageText.Text = FormatNullableDouble(snapshot.ReservedOutputVoltageV, "0.000");
+        G2000ReservedOutputCurrentText.Text = FormatNullableDouble(snapshot.ReservedOutputCurrentA, "0.000");
 
         G2000Raw180Text.Text = snapshot.StatusFrameHex;
         G2000Raw280Text.Text = snapshot.DcLinkActualFrameHex;
@@ -1208,7 +1169,7 @@ public partial class MainWindow : Window
 
         if (_settings?.Relay.ResolveMode() == RelayControllerMode.G2000Can)
         {
-            CurrentModeText.Text = snapshot.UiMode == G2000UiMode.Automatic ? "G2000 automatic" : "G2000 manual";
+            CurrentModeText.Text = FormatG2000UiMode(snapshot.UiMode);
         }
 
         UpdateRelayBankStatus();
@@ -1228,16 +1189,16 @@ public partial class MainWindow : Window
         var canMode = mode == RelayControllerMode.G2000Can;
 
         G2000ControlPathText.Text = canMode
-            ? string.Format(CultureInfo.InvariantCulture, "G2000Can {0}, node 0x{1:X2}", can.Channel, can.NodeId)
-            : string.Format(CultureInfo.InvariantCulture, "{0}; G2000 controls need G2000Can", mode);
+            ? string.Format(CultureInfo.InvariantCulture, T("g2000.controlPathCan"), can.Channel, can.NodeId)
+            : string.Format(CultureInfo.InvariantCulture, T("g2000.controlPathUnavailable"), mode);
         G2000InterlockText.Text = canMode
             ? relay.DryRun
-                ? "Physical interlock: Dry Run"
-                : string.Format(CultureInfo.InvariantCulture, "Physical interlock: {0}", relay.PortName)
-            : string.Format(CultureInfo.InvariantCulture, "Relay output: {0}", mode);
+                ? T("g2000.physicalInterlockDryRun")
+                : string.Format(CultureInfo.InvariantCulture, T("g2000.physicalInterlockPort"), relay.PortName)
+            : string.Format(CultureInfo.InvariantCulture, T("g2000.relayOutputMode"), mode);
         G2000SetpointsSummaryText.Text = string.Format(
             CultureInfo.InvariantCulture,
-            "U2 {0} V | {1} kHz | duty {2}% | T {3}/{4} ms",
+            T("g2000.setpointSummary"),
             CompactInput(G2000VoltageBox.Text),
             CompactInput(G2000FrequencyBox.Text),
             CompactInput(G2000DutyBox.Text),
@@ -1245,14 +1206,14 @@ public partial class MainWindow : Window
             CompactInput(G2000ToffBox.Text));
         G2000RecipeSummaryText.Text = string.Format(
             CultureInfo.InvariantCulture,
-            "S1 {0} V / {1} ms -> S2 {2} V | {3} | {4}, {5}, {6}",
+            T("g2000.recipeSummary"),
             CompactInput(G2000Stage1VoltageBox.Text),
             CompactInput(G2000Stage1DurationBox.Text),
             CompactInput(G2000Stage2VoltageBox.Text),
-            G2000RecoveryPolicyBox.SelectedValue?.ToString() ?? can.ResolveRecoveryPolicy().ToString(),
-            G2000Stage2HoldBox.IsChecked == true ? "hold S2" : "no hold",
-            G2000EnterHvReadyBox.IsChecked == true ? "ready lead" : "no ready lead",
-            G2000EnterHvOnBox.IsChecked == true ? "auto EIN" : "manual EIN");
+            FormatRecoveryPolicy((TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ?? can.ResolveRecoveryPolicy()),
+            G2000Stage2HoldBox.IsChecked == true ? T("g2000.holdStage2") : T("g2000.noHoldStage2"),
+            G2000EnterHvReadyBox.IsChecked == true ? T("g2000.readyLead") : T("g2000.noReadyLead"),
+            G2000EnterHvOnBox.IsChecked == true ? T("g2000.autoEin") : T("g2000.manualEin"));
     }
 
     private async Task LoadRecentHistoryAsync()
@@ -1266,6 +1227,7 @@ public partial class MainWindow : Window
         if (latest is not null)
         {
             _lastTemperatureC = latest.TemperatureC;
+            _lastTemperatureSampleAt = latest.Timestamp;
             if (latest.RelayAction == RelayAction.StopSent || latest.Status == MonitorStatus.Tripped)
             {
                 SetAllChannelStates(false);
@@ -1285,9 +1247,16 @@ public partial class MainWindow : Window
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
         _monitoringCts = null;
-        _stopG2000AutomaticOnMonitoringFailure = false;
+        _monitoringStartedAt = null;
         SetStatus(_stateMachine.IsTripped ? MonitorStatus.Tripped : MonitorStatus.Idle);
         FooterText.Text = message;
+    }
+
+    private void MarkMonitoringSessionStarted()
+    {
+        _monitoringStartedAt = DateTimeOffset.Now;
+        _lastTemperatureC = null;
+        _lastTemperatureSampleAt = null;
     }
 
     private void BindSettingsToUi()
@@ -1356,6 +1325,7 @@ public partial class MainWindow : Window
         _settings.Relay.G2000Can.StartupRecipe.EnterHvOnAtStart = G2000EnterHvOnBox.IsChecked == true;
         _settings.Relay.G2000Can.RecoveryPolicy = ((TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ?? TripRecoveryPolicy.HoldHvAus).ToString();
         _settings.Relay.Normalize();
+        ValidateG2000U2SettingsForUi();
         _settings.Relay.G2000Can.ValidateWritableSetpoints(_settings.Relay.G2000Can.WritableSetpoints);
         _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
         _settings.Amc2100.Normalize();
@@ -1380,11 +1350,40 @@ public partial class MainWindow : Window
         _settings.Relay.G2000Can.StartupRecipe.EnterHvOnAtStart = G2000EnterHvOnBox.IsChecked == true;
         _settings.Relay.G2000Can.RecoveryPolicy = ((TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ?? TripRecoveryPolicy.HoldHvAus).ToString();
         _settings.Relay.G2000Can.Normalize();
+        ValidateG2000U2SettingsForUi();
         _settings.Relay.G2000Can.ValidateWritableSetpoints(_settings.Relay.G2000Can.WritableSetpoints);
         _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
         ApplyG2000RecoveryPolicyToController();
         UpdateG2000SettingsSummary();
+    }
+
+    private void ValidateG2000U2SettingsForUi()
+    {
+        var can = _settings.Relay.G2000Can;
+        if (can.AllowUnsafeU2Writes)
+        {
+            return;
+        }
+
+        ValidateG2000U2VoltageForUi(can.WritableSetpoints.VoltageV, T("label.g2000Voltage"), can);
+        ValidateG2000U2VoltageForUi(can.StartupRecipe.Stage1VoltageV, T("label.g2000Stage1Voltage"), can);
+        ValidateG2000U2VoltageForUi(can.StartupRecipe.Stage2VoltageV, T("label.g2000Stage2Voltage"), can);
+    }
+
+    private void ValidateG2000U2VoltageForUi(double value, string name, G2000CanSettings can)
+    {
+        if (value >= can.VerifiedU2MinVoltageV && value <= can.VerifiedU2MaxVoltageV)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(string.Format(
+            CultureInfo.InvariantCulture,
+            T("message.g2000U2OutOfRange"),
+            name,
+            value,
+            can.DescribeVerifiedU2Window()));
     }
 
     private async void LanguageBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1507,6 +1506,11 @@ public partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
+        var wasBindingSettings = _isBindingSettings;
+        _isBindingSettings = true;
+        RefreshG2000RecoveryPolicyOptions();
+        _isBindingSettings = wasBindingSettings;
+
         Title = T("app.title");
         TitleText.Text = T("app.title");
         VersionText.Text = $"Version {GetSoftwareVersion()}";
@@ -1529,9 +1533,15 @@ public partial class MainWindow : Window
         CurrentModeLabel.Text = T("label.currentMode");
         EngineeringHintText.Text = T("engineering.hint");
         MonitorTab.Header = T("tab.monitor");
-        G2000Tab.Header = "G2000";
+        G2000Tab.Header = T("tab.g2000");
         EngineeringTab.Header = T("tab.engineering");
         ControlsCardTitle.Text = T("group.controls");
+        G2000RunControlTitle.Text = T("group.g2000RunControl");
+        G2000HighRiskText.Text = T("g2000.highRisk");
+        G2000WritableSetpointsTitle.Text = T("group.g2000WritableSetpoints");
+        G2000AutomaticTitle.Text = T("group.g2000Automatic");
+        G2000ActualsTitle.Text = T("group.g2000Actuals");
+        G2000RawFramesTitle.Text = T("group.g2000RawFrames");
         SettingsCardTitle.Text = T("group.configuration");
         ChartGroupTitle.Text = T("group.chart");
         HistoryCardTitle.Text = T("group.history");
@@ -1552,6 +1562,13 @@ public partial class MainWindow : Window
         RestoreAllEngineeringButton.Content = T("button.connectAll");
         RestoreMonitoringControlButton.Content = T("button.restoreMonitoring");
         SaveSettingsButton.Content = T("button.save");
+        G2000RefreshButton.Content = T("button.g2000Refresh");
+        G2000HvAusButton.Content = T("button.g2000HvAus");
+        G2000HvReadyButton.Content = T("button.g2000HvReady");
+        G2000HvEinButton.Content = T("button.g2000HvEin");
+        G2000ApplySetpointsButton.Content = T("button.g2000ApplySetpoints");
+        G2000StartAutomaticButton.Content = T("button.g2000StartAutomatic");
+        G2000StopAutomaticButton.Content = T("button.g2000StopAutomatic");
         WindowLabel.Text = T("label.window");
         ThresholdLabel.Text = T("label.threshold");
         TesseractLabel.Text = T("label.tesseract");
@@ -1562,6 +1579,44 @@ public partial class MainWindow : Window
         LanguageQuickLabel.Text = T("label.language");
         DryRunBox.Content = T("check.dryRun");
         AutoResetBox.Content = T("check.autoReset");
+        G2000ConnectionLabel.Text = T("label.g2000Connection");
+        G2000SourceLabel.Text = T("label.g2000Source");
+        G2000FaultLabel.Text = T("label.g2000Fault");
+        G2000TripLabel.Text = T("label.g2000Trip");
+        G2000ModeLabel.Text = T("label.g2000Mode");
+        G2000StageLabel.Text = T("label.g2000Stage");
+        G2000ControlLabel.Text = T("label.g2000Control");
+        G2000InterlockLabel.Text = T("label.g2000Interlock");
+        G2000SetpointsLabel.Text = T("label.g2000Setpoints");
+        G2000RecipeLabel.Text = T("label.g2000Recipe");
+        G2000VoltageLabel.Text = T("label.g2000Voltage");
+        G2000FrequencyLabel.Text = T("label.g2000Frequency");
+        G2000DutyLabel.Text = T("label.g2000Duty");
+        G2000TonLabel.Text = T("label.g2000Ton");
+        G2000ToffLabel.Text = T("label.g2000Toff");
+        G2000Stage1VoltageLabel.Text = T("label.g2000Stage1Voltage");
+        G2000Stage1DurationLabel.Text = T("label.g2000Stage1Duration");
+        G2000Stage2VoltageLabel.Text = T("label.g2000Stage2Voltage");
+        G2000RecoveryPolicyLabel.Text = T("label.g2000Recovery");
+        G2000Stage2HoldBox.Content = T("check.g2000HoldStage2");
+        G2000EnterHvReadyBox.Content = T("check.g2000EnterHvReady");
+        G2000EnterHvOnBox.Content = T("check.g2000EnterHvOn");
+        G2000TargetHeaderText.Text = T("label.g2000Target");
+        G2000ActualHeaderText.Text = T("label.g2000Actual");
+        G2000ActualVoltageLabel.Text = T("label.g2000ActualVoltage");
+        G2000ActualDcLinkCurrentLabel.Text = T("label.g2000ActualDcLinkCurrent");
+        G2000ActualFrequencyLabel.Text = T("label.g2000ActualFrequency");
+        G2000ActualDutyLabel.Text = T("label.g2000ActualDuty");
+        G2000ActualTonLabel.Text = T("label.g2000ActualTon");
+        G2000ActualToffLabel.Text = T("label.g2000ActualToff");
+        G2000ReservedOutputVoltageLabel.Text = T("label.g2000ReservedOutputVoltage");
+        G2000ReservedOutputCurrentLabel.Text = T("label.g2000ReservedOutputCurrent");
+        G2000U2NoticeText.Text = T("g2000.u2Notice");
+        G2000Raw180Label.Text = T("label.g2000Raw180");
+        G2000Raw280Label.Text = T("label.g2000Raw280");
+        G2000Raw281Label.Text = T("label.g2000Raw281");
+        G2000Raw380Label.Text = T("label.g2000Raw380");
+        G2000Raw381Label.Text = T("label.g2000Raw381");
         AmcSectionTitle.Text = T("group.amc2100");
         AmcEnabledBox.Content = T("check.amcEnabled");
         AmcPortLabel.Text = T("label.amcCom");
@@ -1577,6 +1632,7 @@ public partial class MainWindow : Window
         RoiColumn.Header = T("grid.roi");
         StopGasButton.Content = T("button.stopGas");
         RestoreGasButton.Content = T("button.restoreGas");
+        ApplyTooltips();
         ApplyChannelLabels();
         SetStatus(_currentStatus);
 
@@ -1597,6 +1653,124 @@ public partial class MainWindow : Window
             ?.InformationalVersion;
 
         return string.IsNullOrWhiteSpace(informationalVersion) ? "dev" : informationalVersion;
+    }
+
+    private void ApplyTooltips()
+    {
+        SetToolTip(LanguageBox, "tooltip.language");
+        SetToolTip(PortBox, "tooltip.port");
+        SetToolTip(StartButton, "tooltip.startTemperatureMonitor");
+        SetToolTip(StopButton, "tooltip.stopTemperatureMonitor");
+        SetToolTip(ResetButton, "tooltip.reset");
+        SetToolTip(SelectRoiButton, "tooltip.selectRoi");
+        SetToolTip(ExportButton, "tooltip.export");
+        SetToolTip(ClearHistoryButton, "tooltip.clearHistory");
+        SetToolTip(WindowTitleBox, "tooltip.windowTitle");
+        SetToolTip(TesseractPathBox, "tooltip.tesseractPath");
+        SetToolTip(ThresholdBox, "tooltip.threshold");
+        SetToolTip(IntervalBox, "tooltip.interval");
+        SetToolTip(RecoveryThresholdBox, "tooltip.recoveryThreshold");
+        SetToolTip(StableSecondsBox, "tooltip.stableSeconds");
+        SetToolTip(DryRunBox, "tooltip.dryRun");
+        SetToolTip(AutoResetBox, "tooltip.autoReset");
+        SetToolTip(SaveSettingsButton, "tooltip.saveSettings");
+        SetToolTip(G2000RefreshButton, "tooltip.g2000Refresh");
+        SetToolTip(G2000HvAusButton, "tooltip.g2000HvAus");
+        SetToolTip(G2000HvReadyButton, "tooltip.g2000HvReady");
+        SetToolTip(G2000HvEinButton, "tooltip.g2000HvEin");
+        SetToolTip(G2000VoltageBox, "tooltip.g2000Voltage");
+        SetToolTip(G2000FrequencyBox, "tooltip.g2000Frequency");
+        SetToolTip(G2000DutyBox, "tooltip.g2000Duty");
+        SetToolTip(G2000TonBox, "tooltip.g2000Ton");
+        SetToolTip(G2000ToffBox, "tooltip.g2000Toff");
+        SetToolTip(G2000ApplySetpointsButton, "tooltip.g2000ApplySetpoints");
+        SetToolTip(G2000Stage1VoltageBox, "tooltip.g2000Stage1Voltage");
+        SetToolTip(G2000Stage1DurationBox, "tooltip.g2000Stage1Duration");
+        SetToolTip(G2000Stage2VoltageBox, "tooltip.g2000Stage2Voltage");
+        SetToolTip(G2000RecoveryPolicyBox, "tooltip.g2000RecoveryPolicy");
+        SetToolTip(G2000Stage2HoldBox, "tooltip.g2000HoldStage2");
+        SetToolTip(G2000EnterHvReadyBox, "tooltip.g2000EnterHvReady");
+        SetToolTip(G2000EnterHvOnBox, "tooltip.g2000EnterHvOn");
+        SetToolTip(G2000StartAutomaticButton, "tooltip.g2000StartAutomatic");
+        SetToolTip(G2000StopAutomaticButton, "tooltip.g2000StopAutomatic");
+        SetToolTip(AmcEnabledBox, "tooltip.amcEnabled");
+        SetToolTip(AmcPortBox, "tooltip.amcPort");
+        SetToolTip(AmcBaudBox, "tooltip.amcBaud");
+        SetToolTip(AmcSlaveBox, "tooltip.amcSlave");
+        SetToolTip(AmcFallbackBox, "tooltip.amcFallback");
+        SetToolTip(AmcForceDigitalModeBox, "tooltip.amcDigitalMode");
+        SetToolTip(StopGasButton, "tooltip.stopGas");
+        SetToolTip(RestoreGasButton, "tooltip.restoreGas");
+        SetToolTip(RestoreMonitoringControlButton, "tooltip.restoreMonitoringControl");
+        SetToolTip(G2000Raw180Text, "tooltip.g2000Raw180");
+        SetToolTip(G2000Raw280Text, "tooltip.g2000Raw280");
+        SetToolTip(G2000Raw281Text, "tooltip.g2000Raw281");
+        SetToolTip(G2000Raw380Text, "tooltip.g2000Raw380");
+        SetToolTip(G2000Raw381Text, "tooltip.g2000Raw381");
+        SetToolTip(FileMenu, "tooltip.menuFile");
+        SetToolTip(ToolsMenu, "tooltip.menuTools");
+        SetToolTip(HelpMenu, "tooltip.menuHelp");
+        SetToolTip(ExportMenuItem, "tooltip.export");
+        SetToolTip(SelectRoiMenuItem, "tooltip.selectRoi");
+        SetToolTip(GuideMenuItem, "tooltip.openGuide");
+        SetToolTip(AdvancedSettingsMenuItem, "tooltip.advancedSettings");
+        SetToolTip(WiringNotesMenuItem, "tooltip.openGuide");
+        SetToolTip(AboutMenuItem, "tooltip.about");
+        SetToolTip(ExitMenuItem, "tooltip.exit");
+
+        foreach (var button in FindVisualChildren<Button>(this))
+        {
+            if (button.Tag is not string tag)
+            {
+                continue;
+            }
+
+            var parts = tag.Split(':', 2);
+            if (parts.Length != 2 || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var delta))
+            {
+                continue;
+            }
+
+            button.ToolTip = string.Format(
+                CultureInfo.InvariantCulture,
+                delta > 0 ? T("tooltip.g2000StepIncrease") : T("tooltip.g2000StepDecrease"),
+                DescribeG2000SetpointForTooltip(parts[0]));
+        }
+    }
+
+    private void SetToolTip(FrameworkElement element, string key)
+    {
+        element.ToolTip = T(key);
+    }
+
+    private string DescribeG2000SetpointForTooltip(string name)
+    {
+        return name switch
+        {
+            "VoltageV" => T("label.g2000Voltage"),
+            "FrequencyKhz" => T("label.g2000Frequency"),
+            "DutyPercent" => T("label.g2000Duty"),
+            "TonMs" => T("label.g2000Ton"),
+            "ToffMs" => T("label.g2000Toff"),
+            _ => name
+        };
+    }
+
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T typed)
+            {
+                yield return typed;
+            }
+
+            foreach (var descendant in FindVisualChildren<T>(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private void ApplyChannelLabels()
@@ -1633,11 +1807,19 @@ public partial class MainWindow : Window
     {
         if (_settings?.Relay.ResolveMode() == RelayControllerMode.G2000Can)
         {
-            var physicalFallbackText = _settings.Relay.DryRun ? "Physical interlock fallback: Dry Run" : $"Physical interlock fallback: {_settings.Relay.PortName}";
-            RelayBankStatusText.Text = $"CAN {_lastG2000Snapshot.Source} | {DescribeG2000HvState(_lastG2000Snapshot)} | {(_lastG2000Snapshot.Fault ? _lastG2000Snapshot.ErrorText : "No fault")} | {physicalFallbackText}";
+            var physicalFallbackText = _settings.Relay.DryRun
+                ? T("relayBank.g2000PhysicalFallbackDryRun")
+                : string.Format(CultureInfo.InvariantCulture, T("relayBank.g2000PhysicalFallbackPort"), _settings.Relay.PortName);
+            RelayBankStatusText.Text = string.Format(
+                CultureInfo.InvariantCulture,
+                "CAN {0} | {1} | {2} | {3}",
+                FormatG2000ControlSource(_lastG2000Snapshot.Source),
+                DescribeG2000HvState(_lastG2000Snapshot),
+                FormatG2000Fault(_lastG2000Snapshot),
+                physicalFallbackText);
             foreach (var channel in _channelUis)
             {
-                channel.StateText.Text = _settings.Relay.DryRun ? "CAN + relay dry run" : "Physical interlock relay";
+                channel.StateText.Text = _settings.Relay.DryRun ? T("relayBank.g2000ChannelDryRun") : T("relayBank.g2000ChannelPhysical");
             }
 
             return;
@@ -1675,7 +1857,7 @@ public partial class MainWindow : Window
         G2000Tab.IsEnabled = true;
         G2000Tab.ToolTip = isCanMode
             ? null
-            : $"G2000 diagnostics are read-only because Relay.Mode is {_settings?.Relay.Mode ?? "--"}.";
+            : string.Format(CultureInfo.InvariantCulture, T("tooltip.g2000TabReadOnly"), _settings?.Relay.Mode ?? "--");
         var physicalRelayAvailable = isCanMode && _settings is not null && !_settings.Relay.DryRun;
 
         TestRelayButton.IsEnabled = true;
@@ -1700,12 +1882,12 @@ public partial class MainWindow : Window
         if (isCanMode)
         {
             EngineeringNotesText.Text = physicalRelayAvailable
-                ? "CAN is the main G2000 control path. Engineering relay actions now operate the physical interlock fallback only."
-                : "CAN is the main G2000 control path. Physical interlock fallback is currently Dry Run only, so relay actions do not move hardware.";
-            TestRelayButton.Content = "断开物理 Interlock / Open Physical Interlock";
-            TestRelayResetButton.Content = "闭合物理 Interlock / Close Physical Interlock";
-            TripAllEngineeringButton.Content = "断开物理 Interlock / Open Physical Interlock";
-            RestoreAllEngineeringButton.Content = "闭合物理 Interlock / Close Physical Interlock";
+                ? T("engineering.g2000CanPhysicalNotes")
+                : T("engineering.g2000CanDryRunNotes");
+            TestRelayButton.Content = T("button.openPhysicalInterlock");
+            TestRelayResetButton.Content = T("button.closePhysicalInterlock");
+            TripAllEngineeringButton.Content = T("button.openPhysicalInterlock");
+            RestoreAllEngineeringButton.Content = T("button.closePhysicalInterlock");
         }
         else
         {
@@ -1723,28 +1905,28 @@ public partial class MainWindow : Window
     private string FormatBranchInterlockFooter(string footerText)
     {
         return _settings.Relay.ResolveMode() == RelayControllerMode.DryRun
-            ? $"{footerText} Dry Run: no hardware command was sent."
+            ? string.Format(CultureInfo.InvariantCulture, T("footer.noHardwareDryRun"), footerText)
             : footerText;
     }
 
-    private static string? BuildBranchInterlockTooltip(RelayControllerMode? relayMode, bool dryRun)
+    private string BuildBranchInterlockTooltip(RelayControllerMode? relayMode, bool dryRun)
     {
         if (relayMode == RelayControllerMode.DryRun)
         {
-            return "Dry Run is active. This command updates the UI only; no hardware relay command will be sent.";
+            return T("tooltip.branchInterlockDryRun");
         }
 
         if (relayMode == RelayControllerMode.G2000Can && dryRun)
         {
-            return "G2000 CAN mode is active. Disable Dry Run before this physical branch interlock command can move hardware.";
+            return T("tooltip.branchInterlockCanDryRun");
         }
 
         if (relayMode == RelayControllerMode.G2000Can)
         {
-            return "Physical interlock relay only. This does not directly command HV EIN/AUS.";
+            return T("tooltip.branchInterlockPhysical");
         }
 
-        return null;
+        return T("tooltip.branchInterlockDefault");
     }
 
     private void SetStatus(MonitorStatus status)
@@ -1859,6 +2041,7 @@ public partial class MainWindow : Window
     private void StartMonitoringLoop(string footerText)
     {
         _monitoringCts = new CancellationTokenSource();
+        MarkMonitoringSessionStarted();
         SetStatus(MonitorStatus.Monitoring);
         SetCurrentMode(T("mode.monitoring"));
         FooterText.Text = footerText;
@@ -1884,6 +2067,7 @@ public partial class MainWindow : Window
         _monitoringCts = new CancellationTokenSource();
         BuildServices();
         await InitializeG2000ControllerAsync();
+        MarkMonitoringSessionStarted();
         SetStatus(MonitorStatus.Monitoring);
         SetCurrentMode(T("mode.monitoring"));
         FooterText.Text = T("footer.monitoringRestarted");
@@ -2010,18 +2194,101 @@ public partial class MainWindow : Window
         return language is "zh-CN" or "de" ? language : "en";
     }
 
-    private static string DescribeG2000HvState(G2000TelemetrySnapshot snapshot)
+    private string DescribeG2000HvState(G2000TelemetrySnapshot snapshot)
     {
         return snapshot.HvOn
-            ? "HV EIN"
+            ? T("g2000.hvEin")
             : snapshot.HvEnable
-                ? "HV bereit"
-                : "HV AUS";
+                ? T("g2000.hvReady")
+                : T("g2000.hvAus");
+    }
+
+    private string FormatG2000ControlSource(G2000ControlSource source)
+    {
+        return source switch
+        {
+            G2000ControlSource.Internal => T("g2000.sourceInternal"),
+            G2000ControlSource.External => T("g2000.sourceExternal"),
+            G2000ControlSource.CanBus => T("g2000.sourceCanBus"),
+            _ => T("g2000.sourceFrontPanelOrUnknown")
+        };
+    }
+
+    private string FormatG2000Fault(G2000TelemetrySnapshot snapshot)
+    {
+        if (!snapshot.Fault)
+        {
+            return T("g2000.noFault");
+        }
+
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "{0} (0x{1:X2})",
+            FormatG2000ErrorCode(snapshot.ErrorCode),
+            snapshot.ErrorCode);
+    }
+
+    private string FormatG2000ErrorCode(byte errorCode)
+    {
+        return errorCode switch
+        {
+            0x07 => T("g2000.errorInternalCanTimeout"),
+            0x08 => T("g2000.errorInterlock"),
+            0x09 => T("g2000.errorExternalCanTimeout"),
+            _ => string.Format(CultureInfo.InvariantCulture, T("g2000.errorUnknown"), errorCode)
+        };
+    }
+
+    private string FormatG2000TripReason(string reason)
+    {
+        return reason switch
+        {
+            "Temperature limit trip" => T("g2000.tripTemperatureLimit"),
+            "Internal CAN timeout" => T("g2000.errorInternalCanTimeout"),
+            "Interlock fault" => T("g2000.errorInterlock"),
+            "External CAN timeout" => T("g2000.errorExternalCanTimeout"),
+            _ when string.IsNullOrWhiteSpace(reason) => T("g2000.tripLatched"),
+            _ => reason
+        };
     }
 
     private static string FormatNullableDouble(double? value, string format)
     {
         return value?.ToString(format, CultureInfo.InvariantCulture) ?? "--";
+    }
+
+    private string FormatG2000UiMode(G2000UiMode mode)
+    {
+        return mode == G2000UiMode.Automatic ? T("g2000.modeAutomatic") : T("g2000.modeManual");
+    }
+
+    private string FormatG2000Stage(string stage)
+    {
+        return stage switch
+        {
+            "Idle" => T("g2000.stageIdle"),
+            "ReadyLead" => T("g2000.stageReadyLead"),
+            "Stage1" => T("g2000.stage1"),
+            "Stage2" => T("g2000.stage2"),
+            "Manual" => T("g2000.stageManual"),
+            "PreparedRecovery" => T("g2000.stagePreparedRecovery"),
+            "Tripped" => T("g2000.stageTripped"),
+            "Stopped" => T("g2000.stageStopped"),
+            "RecoveredToHvReady" => T("g2000.stageRecoveredToHvReady"),
+            "HoldHvAus" => T("g2000.stageHoldHvAus"),
+            _ => stage
+        };
+    }
+
+    private string FormatRecoveryPolicy(TripRecoveryPolicy policy)
+    {
+        return policy switch
+        {
+            TripRecoveryPolicy.HoldHvAus => T("g2000.recoveryHoldHvAus"),
+            TripRecoveryPolicy.RestoreHvReady => T("g2000.recoveryRestoreHvReady"),
+            TripRecoveryPolicy.RestorePreviousState => T("g2000.recoveryRestorePreviousState"),
+            _ => policy.ToString()
+        };
     }
 
     private static string CompactInput(string? value)
@@ -2089,7 +2356,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        ShowSetupWarning("The setpoints in the text boxes have not been sent yet. Click 'Apply Setpoints / 写入设定值' first. 输入框里的设定值还没有下发，请先点“写入设定值”。");
+        ShowSetupWarning(T("message.g2000PendingSetpoints"));
         return true;
     }
 

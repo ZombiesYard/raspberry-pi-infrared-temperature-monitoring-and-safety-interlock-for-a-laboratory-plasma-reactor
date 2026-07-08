@@ -194,8 +194,8 @@
 
                 <Border Style="{StaticResource CardBorderStyle}">
                   <StackPanel>
-                    <TextBlock Text="G2000 日常控制 / G2000 Run Control" Style="{StaticResource CardTitleStyle}" />
-                    <TextBlock Text="HV EIN 高风险 / High risk" Foreground="#B00020" FontWeight="SemiBold" Margin="0,0,0,10" />
+                    <TextBlock x:Name="G2000RunControlTitle" Text="G2000 Run Control" Style="{StaticResource CardTitleStyle}" />
+                    <TextBlock x:Name="G2000HighRiskText" Text="HV on high risk" Foreground="#B00020" FontWeight="SemiBold" Margin="0,0,0,10" />
 
                     <Grid Margin="0,0,0,10">
                       <Grid.ColumnDefinitions>
@@ -215,36 +215,36 @@
                         <RowDefinition Height="Auto" />
                       </Grid.RowDefinitions>
 
-                      <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Connection" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000ConnectionLabel" Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Connection" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000ConnectionText" Grid.Row="0" Grid.Column="1" Text="Not connected" Margin="0,0,0,6" TextWrapping="Wrap" />
-                      <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Source" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000SourceLabel" Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Source" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000SourceText" Grid.Row="1" Grid.Column="1" Text="--" Margin="0,0,0,6" />
-                      <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Fault" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000FaultLabel" Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Fault" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000FaultText" Grid.Row="2" Grid.Column="1" Text="--" Margin="0,0,0,6" TextWrapping="Wrap" />
-                      <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Trip" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000TripLabel" Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Trip" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000TripText" Grid.Row="3" Grid.Column="1" Text="--" Margin="0,0,0,6" TextWrapping="Wrap" />
-                      <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Mode" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000ModeLabel" Grid.Row="4" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Mode" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000ModeText" Grid.Row="4" Grid.Column="1" Text="Manual" Margin="0,0,0,6" />
-                      <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Stage" Margin="0,0,10,0" />
+                      <TextBlock x:Name="G2000StageLabel" Grid.Row="5" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Stage" Margin="0,0,10,0" />
                       <TextBlock x:Name="G2000AutoStageText" Grid.Row="5" Grid.Column="1" Text="Idle" Margin="0,0,0,6" TextWrapping="Wrap" />
-                      <TextBlock Grid.Row="6" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Control" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000ControlLabel" Grid.Row="6" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Control" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000ControlPathText" Grid.Row="6" Grid.Column="1" Text="--" Margin="0,0,0,6" TextWrapping="Wrap" />
-                      <TextBlock Grid.Row="7" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Interlock" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000InterlockLabel" Grid.Row="7" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Interlock" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000InterlockText" Grid.Row="7" Grid.Column="1" Text="--" Margin="0,0,0,6" TextWrapping="Wrap" />
-                      <TextBlock Grid.Row="8" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Setpoints" Margin="0,0,10,6" />
+                      <TextBlock x:Name="G2000SetpointsLabel" Grid.Row="8" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Setpoints" Margin="0,0,10,6" />
                       <TextBlock x:Name="G2000SetpointsSummaryText" Grid.Row="8" Grid.Column="1" Text="--" Margin="0,0,0,6" TextWrapping="Wrap" />
-                      <TextBlock Grid.Row="9" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Recipe" Margin="0,0,10,0" />
+                      <TextBlock x:Name="G2000RecipeLabel" Grid.Row="9" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Recipe" Margin="0,0,10,0" />
                       <TextBlock x:Name="G2000RecipeSummaryText" Grid.Row="9" Grid.Column="1" Text="--" TextWrapping="Wrap" />
                     </Grid>
 
                     <UniformGrid Columns="2" Margin="0,0,0,8">
-                      <Button x:Name="G2000RefreshButton" Style="{StaticResource SecondaryButtonStyle}" Content="连接/刷新" Click="G2000RefreshButton_Click" Margin="0,0,6,8" />
-                      <Button x:Name="G2000HvAusButton" Style="{StaticResource SecondaryButtonStyle}" Content="HV AUS" Click="G2000HvAusButton_Click" Margin="6,0,0,8" />
-                      <Button x:Name="G2000HvReadyButton" Style="{StaticResource SecondaryButtonStyle}" Content="HV bereit" Click="G2000HvReadyButton_Click" Margin="0,0,6,8" />
-                      <Button x:Name="G2000HvEinButton" Style="{StaticResource PrimaryButtonStyle}" Content="HV EIN" Click="G2000HvEinButton_Click" Margin="6,0,0,8" />
+                      <Button x:Name="G2000RefreshButton" Style="{StaticResource SecondaryButtonStyle}" Content="Connect / refresh" Click="G2000RefreshButton_Click" Margin="0,0,6,8" />
+                      <Button x:Name="G2000HvAusButton" Style="{StaticResource SecondaryButtonStyle}" Content="Set HV off" Click="G2000HvAusButton_Click" Margin="6,0,0,8" />
+                      <Button x:Name="G2000HvReadyButton" Style="{StaticResource SecondaryButtonStyle}" Content="Set HV ready" Click="G2000HvReadyButton_Click" Margin="0,0,6,8" />
+                      <Button x:Name="G2000HvEinButton" Style="{StaticResource PrimaryButtonStyle}" Content="Set HV on" Click="G2000HvEinButton_Click" Margin="6,0,0,8" />
                     </UniformGrid>
 
-                    <TextBlock Text="可写设定值 / Writable Setpoints" FontWeight="SemiBold" Foreground="#1F2937" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000WritableSetpointsTitle" Text="Writable Setpoints" FontWeight="SemiBold" Foreground="#1F2937" Margin="0,0,0,8" />
                     <Grid>
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="94" />
@@ -260,34 +260,34 @@
                         <RowDefinition Height="Auto" />
                       </Grid.RowDefinitions>
 
-                      <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="U2 V" Margin="0,7,8,0" />
+                      <TextBlock x:Name="G2000VoltageLabel" Grid.Row="0" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="U2 V" Margin="0,7,8,0" />
                       <TextBox x:Name="G2000VoltageBox" Grid.Row="0" Grid.Column="1" Style="{StaticResource InputStyle}" TextChanged="G2000SettingsInput_Changed" />
                       <Button Grid.Row="0" Grid.Column="2" Style="{StaticResource StepButtonStyle}" Content="-" Tag="VoltageV:-0.1" Click="G2000SetpointStepButton_Click" />
                       <Button Grid.Row="0" Grid.Column="3" Style="{StaticResource StepButtonStyle}" Content="+" Tag="VoltageV:0.1" Click="G2000SetpointStepButton_Click" />
 
-                      <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Freq kHz" Margin="0,7,8,0" />
+                      <TextBlock x:Name="G2000FrequencyLabel" Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Freq kHz" Margin="0,7,8,0" />
                       <TextBox x:Name="G2000FrequencyBox" Grid.Row="1" Grid.Column="1" Style="{StaticResource InputStyle}" TextChanged="G2000SettingsInput_Changed" />
                       <Button Grid.Row="1" Grid.Column="2" Style="{StaticResource StepButtonStyle}" Content="-" Tag="FrequencyKhz:-0.1" Click="G2000SetpointStepButton_Click" />
                       <Button Grid.Row="1" Grid.Column="3" Style="{StaticResource StepButtonStyle}" Content="+" Tag="FrequencyKhz:0.1" Click="G2000SetpointStepButton_Click" />
 
-                      <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Duty %" Margin="0,7,8,0" />
+                      <TextBlock x:Name="G2000DutyLabel" Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Duty %" Margin="0,7,8,0" />
                       <TextBox x:Name="G2000DutyBox" Grid.Row="2" Grid.Column="1" Style="{StaticResource InputStyle}" TextChanged="G2000SettingsInput_Changed" />
                       <Button Grid.Row="2" Grid.Column="2" Style="{StaticResource StepButtonStyle}" Content="-" Tag="DutyPercent:-0.1" Click="G2000SetpointStepButton_Click" />
                       <Button Grid.Row="2" Grid.Column="3" Style="{StaticResource StepButtonStyle}" Content="+" Tag="DutyPercent:0.1" Click="G2000SetpointStepButton_Click" />
 
-                      <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Ton ms" Margin="0,7,8,0" />
+                      <TextBlock x:Name="G2000TonLabel" Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Ton ms" Margin="0,7,8,0" />
                       <TextBox x:Name="G2000TonBox" Grid.Row="3" Grid.Column="1" Style="{StaticResource InputStyle}" TextChanged="G2000SettingsInput_Changed" />
                       <Button Grid.Row="3" Grid.Column="2" Style="{StaticResource StepButtonStyle}" Content="-" Tag="TonMs:-0.1" Click="G2000SetpointStepButton_Click" />
                       <Button Grid.Row="3" Grid.Column="3" Style="{StaticResource StepButtonStyle}" Content="+" Tag="TonMs:0.1" Click="G2000SetpointStepButton_Click" />
 
-                      <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Toff ms" Margin="0,7,8,0" />
+                      <TextBlock x:Name="G2000ToffLabel" Grid.Row="4" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Toff ms" Margin="0,7,8,0" />
                       <TextBox x:Name="G2000ToffBox" Grid.Row="4" Grid.Column="1" Style="{StaticResource InputStyle}" TextChanged="G2000SettingsInput_Changed" />
                       <Button Grid.Row="4" Grid.Column="2" Style="{StaticResource StepButtonStyle}" Content="-" Tag="ToffMs:-0.1" Click="G2000SetpointStepButton_Click" />
                       <Button Grid.Row="4" Grid.Column="3" Style="{StaticResource StepButtonStyle}" Content="+" Tag="ToffMs:0.1" Click="G2000SetpointStepButton_Click" />
                     </Grid>
-                    <Button x:Name="G2000ApplySetpointsButton" Style="{StaticResource SecondaryButtonStyle}" Content="写入设定值" Click="G2000ApplySetpointsButton_Click" />
+                    <Button x:Name="G2000ApplySetpointsButton" Style="{StaticResource SecondaryButtonStyle}" Content="Apply setpoints" Click="G2000ApplySetpointsButton_Click" />
 
-                    <TextBlock Text="自动两段 / Automatic 2-stage" FontWeight="SemiBold" Foreground="#1F2937" Margin="0,4,0,8" />
+                    <TextBlock x:Name="G2000AutomaticTitle" Text="Automatic 2-stage" FontWeight="SemiBold" Foreground="#1F2937" Margin="0,4,0,8" />
                     <Grid Margin="0,0,0,8">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -299,30 +299,27 @@
                         <RowDefinition Height="Auto" />
                       </Grid.RowDefinitions>
                       <StackPanel Grid.Row="0" Grid.Column="0">
-                        <TextBlock Style="{StaticResource LabelStyle}" Text="Stage1 U2 V" />
+                        <TextBlock x:Name="G2000Stage1VoltageLabel" Style="{StaticResource LabelStyle}" Text="Stage1 U2 V" />
                         <TextBox x:Name="G2000Stage1VoltageBox" Style="{StaticResource InputStyle}" Margin="0,0,0,8" TextChanged="G2000SettingsInput_Changed" />
                       </StackPanel>
                       <StackPanel Grid.Row="0" Grid.Column="2">
-                        <TextBlock Style="{StaticResource LabelStyle}" Text="Delay ms" />
+                        <TextBlock x:Name="G2000Stage1DurationLabel" Style="{StaticResource LabelStyle}" Text="Delay ms" />
                         <TextBox x:Name="G2000Stage1DurationBox" Style="{StaticResource InputStyle}" Margin="0,0,0,8" TextChanged="G2000SettingsInput_Changed" />
                       </StackPanel>
                       <StackPanel Grid.Row="1" Grid.Column="0">
-                        <TextBlock Style="{StaticResource LabelStyle}" Text="Stage2 U2 V" />
+                        <TextBlock x:Name="G2000Stage2VoltageLabel" Style="{StaticResource LabelStyle}" Text="Stage2 U2 V" />
                         <TextBox x:Name="G2000Stage2VoltageBox" Style="{StaticResource InputStyle}" Margin="0" TextChanged="G2000SettingsInput_Changed" />
                       </StackPanel>
                       <StackPanel Grid.Row="1" Grid.Column="2">
-                        <TextBlock Style="{StaticResource LabelStyle}" Text="Recovery" />
+                        <TextBlock x:Name="G2000RecoveryPolicyLabel" Style="{StaticResource LabelStyle}" Text="Recovery" />
                         <ComboBox x:Name="G2000RecoveryPolicyBox" Style="{StaticResource ComboStyle}" Margin="0" SelectionChanged="G2000RecoveryPolicyBox_SelectionChanged" />
                       </StackPanel>
                     </Grid>
                     <CheckBox x:Name="G2000Stage2HoldBox" Content="Hold Stage2" Margin="0,0,0,6" Checked="G2000SettingsInput_Changed" Unchecked="G2000SettingsInput_Changed" />
-                    <CheckBox x:Name="G2000EnterHvReadyBox" Content="Enter HV bereit first" Margin="0,0,0,6" Checked="G2000SettingsInput_Changed" Unchecked="G2000SettingsInput_Changed" />
-                    <CheckBox x:Name="G2000EnterHvOnBox" Content="Enter HV EIN at start" Margin="0,0,0,10" Checked="G2000SettingsInput_Changed" Unchecked="G2000SettingsInput_Changed" />
-                    <Button x:Name="G2000StartAutomaticAndMonitorButton" Style="{StaticResource PrimaryButtonStyle}" Content="启动 G2000 两段 + 温度监控" Click="G2000StartAutomaticAndMonitorButton_Click" Margin="0,0,0,8" />
-                    <UniformGrid Columns="2">
-                      <Button x:Name="G2000StartAutomaticButton" Style="{StaticResource PrimaryButtonStyle}" Content="开始自动" Click="G2000StartAutomaticButton_Click" Margin="0,0,6,8" />
-                      <Button x:Name="G2000StopAutomaticButton" Style="{StaticResource SecondaryButtonStyle}" Content="停止自动" Click="G2000StopAutomaticButton_Click" Margin="6,0,0,8" />
-                    </UniformGrid>
+                    <CheckBox x:Name="G2000EnterHvReadyBox" Content="Enter HV ready first" Margin="0,0,0,6" Checked="G2000SettingsInput_Changed" Unchecked="G2000SettingsInput_Changed" />
+                    <CheckBox x:Name="G2000EnterHvOnBox" Content="Enter HV on at start" Margin="0,0,0,10" Checked="G2000SettingsInput_Changed" Unchecked="G2000SettingsInput_Changed" />
+                    <Button x:Name="G2000StartAutomaticButton" Style="{StaticResource PrimaryButtonStyle}" Content="Start G2000 automatic run" Click="G2000StartAutomaticButton_Click" />
+                    <Button x:Name="G2000StopAutomaticButton" Style="{StaticResource SecondaryButtonStyle}" Content="Stop automatic run" Click="G2000StopAutomaticButton_Click" />
                   </StackPanel>
                 </Border>
 
@@ -384,20 +381,13 @@
               </StackPanel>
             </ScrollViewer>
 
-            <Grid Grid.Column="2">
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="12" />
-                <RowDefinition Height="2*" MinHeight="220" />
-                <RowDefinition Height="16" />
-                <RowDefinition Height="*" MinHeight="120" />
-              </Grid.RowDefinitions>
-
-              <Border Grid.Row="0" Style="{StaticResource CardBorderStyle}" Margin="0" Padding="12">
+            <ScrollViewer x:Name="MonitorRightScrollViewer" Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel>
+              <Border Style="{StaticResource CardBorderStyle}" Margin="0" Padding="12">
                 <StackPanel>
-                  <TextBlock Text="G2000 目标与实际值 / Targets And Actuals" Style="{StaticResource CardTitleStyle}" />
+                  <TextBlock x:Name="G2000ActualsTitle" Text="G2000 Targets and Actuals" Style="{StaticResource CardTitleStyle}" />
                   <TextBlock x:Name="G2000DiagnosticStatusText" Text="--" Foreground="#475569" TextWrapping="Wrap" Margin="0,0,0,10" />
-                  <TextBlock Text="0x280 / U2 Actual 是内部中间回路实际值，不是外部高压输出端电压。" Foreground="#7C2D12" TextWrapping="Wrap" Margin="0,0,0,12" />
+                  <TextBlock x:Name="G2000U2NoticeText" Text="0x280 / U2 actual is the internal DC-link value, not the external high-voltage output." Foreground="#7C2D12" TextWrapping="Wrap" Margin="0,0,0,12" />
                   <Grid>
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="1.1*" />
@@ -411,49 +401,61 @@
                       <RowDefinition Height="Auto" />
                       <RowDefinition Height="Auto" />
                       <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Grid.Column="1" Text="Target" FontWeight="SemiBold" />
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Actual" FontWeight="SemiBold" />
+                    <TextBlock x:Name="G2000TargetHeaderText" Grid.Row="0" Grid.Column="1" Text="Target" FontWeight="SemiBold" />
+                    <TextBlock x:Name="G2000ActualHeaderText" Grid.Row="0" Grid.Column="2" Text="Actual" FontWeight="SemiBold" />
 
-                    <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="U2 Setpoint / 0x280 Actual V" Margin="0,0,12,8" />
+                    <TextBlock x:Name="G2000ActualVoltageLabel" Grid.Row="1" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="U2 setpoint / 0x280 actual V" Margin="0,0,12,8" />
                     <TextBlock x:Name="G2000TargetVoltageText" Grid.Row="1" Grid.Column="1" Text="--" Margin="0,0,0,8" />
                     <TextBlock x:Name="G2000ActualVoltageText" Grid.Row="1" Grid.Column="2" Text="--" Margin="0,0,0,8" />
 
-                    <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Frequency kHz" Margin="0,0,12,8" />
-                    <TextBlock x:Name="G2000TargetFrequencyText" Grid.Row="2" Grid.Column="1" Text="--" Margin="0,0,0,8" />
-                    <TextBlock x:Name="G2000ActualFrequencyText" Grid.Row="2" Grid.Column="2" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualDcLinkCurrentLabel" Grid.Row="2" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="0x280 reserved DC-link current A" Margin="0,0,12,8" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualDcLinkCurrentText" Grid.Row="2" Grid.Column="2" Text="--" Margin="0,0,0,8" />
 
-                    <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Duty %" Margin="0,0,12,8" />
-                    <TextBlock x:Name="G2000TargetDutyText" Grid.Row="3" Grid.Column="1" Text="--" Margin="0,0,0,8" />
-                    <TextBlock x:Name="G2000ActualDutyText" Grid.Row="3" Grid.Column="2" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualFrequencyLabel" Grid.Row="3" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Frequency kHz" Margin="0,0,12,8" />
+                    <TextBlock x:Name="G2000TargetFrequencyText" Grid.Row="3" Grid.Column="1" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualFrequencyText" Grid.Row="3" Grid.Column="2" Text="--" Margin="0,0,0,8" />
 
-                    <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Ton ms" Margin="0,0,12,8" />
-                    <TextBlock x:Name="G2000TargetTonText" Grid.Row="4" Grid.Column="1" Text="--" Margin="0,0,0,8" />
-                    <TextBlock x:Name="G2000ActualTonText" Grid.Row="4" Grid.Column="2" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualDutyLabel" Grid.Row="4" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Duty %" Margin="0,0,12,8" />
+                    <TextBlock x:Name="G2000TargetDutyText" Grid.Row="4" Grid.Column="1" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualDutyText" Grid.Row="4" Grid.Column="2" Text="--" Margin="0,0,0,8" />
 
-                    <TextBlock Grid.Row="5" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Toff ms / Aux" Margin="0,0,12,0" />
-                    <TextBlock x:Name="G2000TargetToffText" Grid.Row="5" Grid.Column="1" Text="--" />
-                    <StackPanel Grid.Row="5" Grid.Column="2">
-                      <TextBlock x:Name="G2000ActualToffText" Text="--" />
-                      <TextBlock x:Name="G2000ActualAuxText" Text="--" Foreground="#64748B" FontSize="11" />
-                    </StackPanel>
+                    <TextBlock x:Name="G2000ActualTonLabel" Grid.Row="5" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Ton ms" Margin="0,0,12,8" />
+                    <TextBlock x:Name="G2000TargetTonText" Grid.Row="5" Grid.Column="1" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualTonText" Grid.Row="5" Grid.Column="2" Text="--" Margin="0,0,0,8" />
+
+                    <TextBlock x:Name="G2000ActualToffLabel" Grid.Row="6" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="Toff ms" Margin="0,0,12,8" />
+                    <TextBlock x:Name="G2000TargetToffText" Grid.Row="6" Grid.Column="1" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ActualToffText" Grid.Row="6" Grid.Column="2" Text="--" Margin="0,0,0,8" />
+
+                    <TextBlock x:Name="G2000ReservedOutputVoltageLabel" Grid.Row="7" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="0x380 reserved output voltage V" Margin="0,0,12,8" />
+                    <TextBlock Grid.Row="7" Grid.Column="1" Text="--" Margin="0,0,0,8" />
+                    <TextBlock x:Name="G2000ReservedOutputVoltageText" Grid.Row="7" Grid.Column="2" Text="--" Margin="0,0,0,8" />
+
+                    <TextBlock x:Name="G2000ReservedOutputCurrentLabel" Grid.Row="8" Grid.Column="0" Style="{StaticResource LabelStyle}" Text="0x380 reserved output current A" Margin="0,0,12,0" />
+                    <TextBlock Grid.Row="8" Grid.Column="1" Text="--" />
+                    <TextBlock x:Name="G2000ReservedOutputCurrentText" Grid.Row="8" Grid.Column="2" Text="--" />
                   </Grid>
                 </StackPanel>
               </Border>
 
-              <Border Grid.Row="2" Style="{StaticResource CardBorderStyle}" Margin="0">
+              <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,0,12" MinHeight="260">
                 <Grid>
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                   </Grid.RowDefinitions>
                   <TextBlock x:Name="ChartGroupTitle" Text="Temperature Trend" Style="{StaticResource CardTitleStyle}" />
-                  <Canvas x:Name="TemperatureChartCanvas" Grid.Row="1" Background="#FCFDFF" SizeChanged="TemperatureChartCanvas_SizeChanged" />
+                  <Canvas x:Name="TemperatureChartCanvas" Grid.Row="1" Background="#FCFDFF" MinHeight="210" SizeChanged="TemperatureChartCanvas_SizeChanged" />
                 </Grid>
               </Border>
 
-              <Border Grid.Row="4" Style="{StaticResource CardBorderStyle}" Margin="0">
+              <Border Style="{StaticResource CardBorderStyle}" Margin="0" MinHeight="240">
                 <Grid>
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -469,6 +471,9 @@
                   </Grid>
                   <DataGrid x:Name="HistoryGrid"
                             Grid.Row="1"
+                            MinHeight="180"
+                            MaxHeight="260"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto"
                             AutoGenerateColumns="False"
                             IsReadOnly="True"
                             HeadersVisibility="Column"
@@ -487,7 +492,8 @@
                   </DataGrid>
                 </Grid>
               </Border>
-            </Grid>
+              </StackPanel>
+            </ScrollViewer>
           </Grid>
         </TabItem>
 
@@ -495,16 +501,16 @@
           <ScrollViewer Margin="0,10,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <Border Style="{StaticResource CardBorderStyle}" Margin="0">
                 <StackPanel>
-                  <TextBlock Text="原始 CAN 帧 / Raw CAN Frames" Style="{StaticResource CardTitleStyle}" />
-                  <TextBlock Style="{StaticResource LabelStyle}" Text="0x180 Status" />
+                  <TextBlock x:Name="G2000RawFramesTitle" Text="Raw CAN Frames" Style="{StaticResource CardTitleStyle}" />
+                  <TextBlock x:Name="G2000Raw180Label" Style="{StaticResource LabelStyle}" Text="0x180 Status" />
                   <TextBox x:Name="G2000Raw180Text" Style="{StaticResource InputStyle}" IsReadOnly="True" />
-                  <TextBlock Style="{StaticResource LabelStyle}" Text="0x280 DC link actual" />
+                  <TextBlock x:Name="G2000Raw280Label" Style="{StaticResource LabelStyle}" Text="0x280 DC link actual" />
                   <TextBox x:Name="G2000Raw280Text" Style="{StaticResource InputStyle}" IsReadOnly="True" />
-                  <TextBlock Style="{StaticResource LabelStyle}" Text="0x281 Inverter actual" />
+                  <TextBlock x:Name="G2000Raw281Label" Style="{StaticResource LabelStyle}" Text="0x281 Inverter actual" />
                   <TextBox x:Name="G2000Raw281Text" Style="{StaticResource InputStyle}" IsReadOnly="True" />
-                  <TextBlock Style="{StaticResource LabelStyle}" Text="0x380 Reserved raw" />
+                  <TextBlock x:Name="G2000Raw380Label" Style="{StaticResource LabelStyle}" Text="0x380 Reserved raw" />
                   <TextBox x:Name="G2000Raw380Text" Style="{StaticResource InputStyle}" IsReadOnly="True" />
-                  <TextBlock Style="{StaticResource LabelStyle}" Text="0x381 Pulse actual" />
+                  <TextBlock x:Name="G2000Raw381Label" Style="{StaticResource LabelStyle}" Text="0x381 Pulse actual" />
                   <TextBox x:Name="G2000Raw381Text" Style="{StaticResource InputStyle}" IsReadOnly="True" Margin="0" />
                 </StackPanel>
               </Border>

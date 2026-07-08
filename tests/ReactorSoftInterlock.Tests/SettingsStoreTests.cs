@@ -5,6 +5,14 @@ namespace ReactorSoftInterlock.Tests;
 public sealed class SettingsStoreTests
 {
     [Fact]
+    public void DefaultsKeepTemperatureMonitorAtOneHertz()
+    {
+        var settings = new AppSettings();
+
+        Assert.Equal(1000, settings.PollIntervalMs);
+    }
+
+    [Fact]
     public async Task LoadAsyncPopulatesRelayBankDefaultsForLegacyConfig()
     {
         var tempFile = Path.GetTempFileName();

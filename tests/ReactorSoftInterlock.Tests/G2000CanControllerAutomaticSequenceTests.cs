@@ -276,13 +276,59 @@ public sealed class G2000CanControllerAutomaticSequenceTests
         Assert.Equal(G2000CanProtocol.CreateCanBusHvOnData(), bus.LastCommandData());
     }
 
+    [Fact]
+    public async Task IncomingReservedActualFrame_UpdatesReservedOutputTelemetry()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 0);
+        var frame = CreateTwoFloatFrameForTest(123.5, 4.25);
+
+        await controller.HandleIncomingMessageForTestAsync(G2000CanProtocol.GetReservedActualId(0), frame, CancellationToken.None);
+
+        Assert.Equal(123.5, controller.Snapshot.ReservedOutputVoltageV!.Value, 2);
+        Assert.Equal(4.25, controller.Snapshot.ReservedOutputCurrentA!.Value, 2);
+        Assert.Equal(G2000CanProtocol.FormatFrame(frame), controller.Snapshot.ReservedActualFrameHex);
+
+        var clone = controller.Snapshot.Clone();
+        Assert.Equal(controller.Snapshot.ReservedOutputVoltageV, clone.ReservedOutputVoltageV);
+        Assert.Equal(controller.Snapshot.ReservedOutputCurrentA, clone.ReservedOutputCurrentA);
+    }
+
+    [Fact]
+    public async Task IncomingDcLinkActualFrame_UpdatesVoltageAndReservedCurrentTelemetry()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 0);
+        byte[] frame = [0x93, 0x3D, 0x8A, 0x3F, 0x00, 0x00, 0x00, 0x00];
+
+        await controller.HandleIncomingMessageForTestAsync(G2000CanProtocol.GetDcLinkActualId(0), frame, CancellationToken.None);
+
+        Assert.Equal(1.08, controller.Snapshot.DcLinkVoltageV!.Value, 2);
+        Assert.Equal(0.0, controller.Snapshot.ReservedDcLinkCurrentA!.Value, 2);
+        Assert.Equal(G2000CanProtocol.FormatFrame(frame), controller.Snapshot.DcLinkActualFrameHex);
+
+        var clone = controller.Snapshot.Clone();
+        Assert.Equal(controller.Snapshot.DcLinkVoltageV, clone.DcLinkVoltageV);
+        Assert.Equal(controller.Snapshot.ReservedDcLinkCurrentA, clone.ReservedDcLinkCurrentA);
+    }
+
+    private static byte[] CreateTwoFloatFrameForTest(double first, double second)
+    {
+        var data = new byte[8];
+        BitConverter.GetBytes((float)first).CopyTo(data, 0);
+        BitConverter.GetBytes((float)second).CopyTo(data, 4);
+        return data;
+    }
+
     private static G2000CanController CreateController(FakePcanBus bus, MutableClock clock, int hvReadyLeadTimeMs)
     {
         var settings = new G2000CanSettings
         {
             HvReadyLeadTimeMs = hvReadyLeadTimeMs,
             CommandPeriodMs = 100,
-            ReadPollIntervalMs = 20
+            ReadPollIntervalMs = 16
         };
 
         return new G2000CanController(settings, bus, () => clock.Now, startBackgroundLoops: false);

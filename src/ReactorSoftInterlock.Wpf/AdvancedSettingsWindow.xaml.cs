@@ -41,6 +41,27 @@ public partial class AdvancedSettingsWindow : Window
         FooterHintText.Text = T("advanced.footer");
         CancelButtonControl.Content = T("button.cancel");
         SaveButtonControl.Content = T("advanced.save");
+        ApplyTooltips();
+    }
+
+    private void ApplyTooltips()
+    {
+        BaudBox.ToolTip = T("tooltip.advancedBaud");
+        RestoreDefaultsButton.ToolTip = T("tooltip.advancedRestoreDefaults");
+        Ch1EnabledBox.ToolTip = T("tooltip.advancedChannelEnabled");
+        Ch2EnabledBox.ToolTip = T("tooltip.advancedChannelEnabled");
+        Ch3EnabledBox.ToolTip = T("tooltip.advancedChannelEnabled");
+        Ch4EnabledBox.ToolTip = T("tooltip.advancedChannelEnabled");
+        Ch1OpenBox.ToolTip = T("tooltip.advancedOpenCommand");
+        Ch2OpenBox.ToolTip = T("tooltip.advancedOpenCommand");
+        Ch3OpenBox.ToolTip = T("tooltip.advancedOpenCommand");
+        Ch4OpenBox.ToolTip = T("tooltip.advancedOpenCommand");
+        Ch1CloseBox.ToolTip = T("tooltip.advancedCloseCommand");
+        Ch2CloseBox.ToolTip = T("tooltip.advancedCloseCommand");
+        Ch3CloseBox.ToolTip = T("tooltip.advancedCloseCommand");
+        Ch4CloseBox.ToolTip = T("tooltip.advancedCloseCommand");
+        CancelButtonControl.ToolTip = T("tooltip.advancedCancel");
+        SaveButtonControl.ToolTip = T("tooltip.advancedSave");
     }
 
     private void BindToUi()
