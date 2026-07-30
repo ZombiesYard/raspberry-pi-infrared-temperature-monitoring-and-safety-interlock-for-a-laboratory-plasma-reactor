@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <InformationalVersion>2026.06.15-branch-interlock-controls</InformationalVersion>
+    <InformationalVersion>2026.07.30-experiment-evidence-export</InformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ReactorSoftInterlock.Application\ReactorSoftInterlock.Application.csproj" />

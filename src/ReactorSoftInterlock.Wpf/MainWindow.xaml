@@ -83,6 +83,7 @@
     <Menu DockPanel.Dock="Top" Background="White" BorderBrush="#D8E0EA" BorderThickness="0,0,0,1">
       <MenuItem x:Name="FileMenu" Header="_File">
         <MenuItem x:Name="ExportMenuItem" Header="Export CSV" Click="ExportButton_Click" />
+        <MenuItem x:Name="ExportExperimentMenuItem" Header="Export Experiment Bundle" Click="ExportExperimentButton_Click" />
         <Separator />
         <MenuItem x:Name="ExitMenuItem" Header="Exit" Click="ExitMenuItem_Click" />
       </MenuItem>
@@ -186,6 +187,7 @@
                     <Button x:Name="ResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Reset" Click="ResetButton_Click" />
                     <Button x:Name="SelectRoiButton" Style="{StaticResource SecondaryButtonStyle}" Content="Select ROI" Click="SelectRoiButton_Click" />
                     <Button x:Name="ExportButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export CSV" Click="ExportButton_Click" />
+                    <Button x:Name="ExportExperimentButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export Experiment Bundle" Click="ExportExperimentButton_Click" />
                     <Separator Margin="0,6,0,12" />
                     <Button x:Name="TestRelayButton" Style="{StaticResource SecondaryButtonStyle}" Content="Disconnect All Interlocks" Click="TestRelayButton_Click" />
                     <Button x:Name="TestRelayResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Connect All Interlocks" Click="TestRelayResetButton_Click" />

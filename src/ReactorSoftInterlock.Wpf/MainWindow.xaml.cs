@@ -33,6 +33,8 @@ public partial class MainWindow : Window
     private SettingsStore _settingsStore = null!;
     private AppSettings _settings = null!;
     private CsvSampleLog _sampleLog = null!;
+    private ExperimentSessionRecorder? _experimentRecorder;
+    private string? _experimentRecorderInitializationError;
     private InterlockStateMachine _stateMachine = null!;
     private MonitoringService? _monitoringService;
     private IRelayBankController? _relayBankController;
@@ -81,6 +83,7 @@ public partial class MainWindow : Window
             BindSettingsToUi();
             ApplyLanguage();
             BuildServices();
+            await InitializeExperimentRecorderAsync();
             await InitializeG2000ControllerAsync();
             SetAllChannelStates(null);
             SetCurrentMode(T("mode.monitoring"));
@@ -109,6 +112,66 @@ public partial class MainWindow : Window
         }
 
         (_relayBankController as IDisposable)?.Dispose();
+
+        try
+        {
+            _experimentRecorder?.RecordEvent("application", "session-stopped", "success");
+            _experimentRecorder?.CompleteAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Evidence shutdown must not prevent the application from closing.
+        }
+    }
+
+    private async Task InitializeExperimentRecorderAsync()
+    {
+        try
+        {
+            var dataDirectory = ResolveDataDirectory();
+            var creationTask = Task.Run(() => ExperimentSessionRecorder.CreateAsync(
+                dataDirectory,
+                _settings,
+                GetSoftwareVersion(),
+                CancellationToken.None));
+            if (await Task.WhenAny(creationTask, Task.Delay(TimeSpan.FromSeconds(2))) != creationTask)
+            {
+                _experimentRecorder = null;
+                _experimentRecorderInitializationError = T("message.experimentRecorderInitializationTimedOut");
+                FooterText.Text = string.Format(
+                    CultureInfo.InvariantCulture,
+                    T("message.experimentRecorderUnavailable"),
+                    _experimentRecorderInitializationError);
+                _ = DisposeLateExperimentRecorderAsync(creationTask);
+                return;
+            }
+
+            _experimentRecorder = await creationTask;
+            _experimentRecorderInitializationError = null;
+        }
+        catch (Exception ex)
+        {
+            _experimentRecorder = null;
+            _experimentRecorderInitializationError = ex.Message;
+            FooterText.Text = string.Format(
+                CultureInfo.InvariantCulture,
+                T("message.experimentRecorderUnavailable"),
+                ex.Message);
+        }
+    }
+
+    private static async Task DisposeLateExperimentRecorderAsync(
+        Task<ExperimentSessionRecorder> creationTask)
+    {
+        try
+        {
+            var recorder = await creationTask.ConfigureAwait(false);
+            await recorder.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Late initialization cleanup must not affect the application.
+        }
     }
 
     private async void GasFlowTimer_Tick(object? sender, EventArgs e)
@@ -197,6 +260,7 @@ public partial class MainWindow : Window
             _settings.Roi.Width = (int)Math.Max(1, selected.Width);
             _settings.Roi.Height = (int)Math.Max(1, selected.Height);
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            _experimentRecorder?.UpdateSettings(_settings);
             FooterText.Text = $"{T("footer.roiSaved")}: {_settings.Roi}";
             if (_monitoringCts is null)
             {
@@ -244,6 +308,11 @@ public partial class MainWindow : Window
         {
             if (!_stateMachine.CanReset(_lastTemperatureC))
             {
+                _experimentRecorder?.RecordEvent(
+                    "interlock",
+                    "manual-reset",
+                    "blocked",
+                    $"temperature_c={FormatDoubleForEvidence(_lastTemperatureC)}");
                 MessageBox.Show(this, T("message.resetBlocked"), T("message.resetBlockedTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -254,9 +323,15 @@ public partial class MainWindow : Window
             SetAllChannelStates(true);
             AlarmReasonText.Text = string.Empty;
             FooterText.Text = $"{T("footer.resetComplete")}: {relayAction}.";
+            _experimentRecorder?.RecordEvent(
+                "interlock",
+                "manual-reset",
+                "command-completed",
+                $"relay_action={relayAction}; temperature_c={FormatDoubleForEvidence(_lastTemperatureC)}; hardware_feedback=false");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("interlock", "manual-reset", "failed", ex.Message);
             ShowError(ex);
         }
     }
@@ -268,6 +343,11 @@ public partial class MainWindow : Window
             await SaveSettingsFromUiAsync();
             if (!ValidateBranchInterlockSetup(requireRestore: false))
             {
+                _experimentRecorder?.RecordEvent(
+                    "relay",
+                    "open-all-interlocks",
+                    "blocked",
+                    "Engineering validation did not pass.");
                 return;
             }
 
@@ -275,9 +355,15 @@ public partial class MainWindow : Window
             SetAllChannelStates(false);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = FormatBranchInterlockFooter(T("footer.allDisconnected"));
+            _experimentRecorder?.RecordEvent(
+                "relay",
+                "open-all-interlocks",
+                "command-completed",
+                "source=engineering-test; hardware_feedback=false");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("relay", "open-all-interlocks", "failed", ex.Message);
             ShowError(ex);
         }
     }
@@ -289,6 +375,11 @@ public partial class MainWindow : Window
             await SaveSettingsFromUiAsync();
             if (!ValidateBranchInterlockSetup(requireRestore: true))
             {
+                _experimentRecorder?.RecordEvent(
+                    "relay",
+                    "close-all-interlocks",
+                    "blocked",
+                    "Engineering validation did not pass.");
                 return;
             }
 
@@ -296,9 +387,15 @@ public partial class MainWindow : Window
             SetAllChannelStates(true);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = FormatBranchInterlockFooter(T("footer.allConnected"));
+            _experimentRecorder?.RecordEvent(
+                "relay",
+                "close-all-interlocks",
+                "command-completed",
+                "source=engineering-test; hardware_feedback=false");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("relay", "close-all-interlocks", "failed", ex.Message);
             ShowError(ex);
         }
     }
@@ -325,6 +422,11 @@ public partial class MainWindow : Window
 
             if (!ValidateBranchInterlockSetup(requireRestore: true, specificChannelNumber: channelNumber))
             {
+                _experimentRecorder?.RecordEvent(
+                    "relay",
+                    closed ? "close-channel" : "open-channel",
+                    "blocked",
+                    $"channel={channelNumber}; engineering validation did not pass");
                 return;
             }
 
@@ -332,9 +434,19 @@ public partial class MainWindow : Window
             SetChannelState(channelNumber, closed);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = FormatBranchInterlockFooter(string.Format(CultureInfo.InvariantCulture, footerTemplate, channelNumber));
+            _experimentRecorder?.RecordEvent(
+                "relay",
+                closed ? "close-channel" : "open-channel",
+                "command-completed",
+                $"channel={channelNumber}; hardware_feedback=false");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent(
+                "relay",
+                closed ? "close-channel" : "open-channel",
+                "failed",
+                ex.Message);
             ShowError(ex);
         }
     }
@@ -365,6 +477,48 @@ public partial class MainWindow : Window
 
             await _sampleLog.ExportAsync(dialog.FileName, CancellationToken.None);
             FooterText.Text = $"{T("footer.csvExported")}: {dialog.FileName}";
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private async void ExportExperimentButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_experimentRecorder is null)
+            {
+                throw new InvalidOperationException(string.Format(
+                    CultureInfo.InvariantCulture,
+                    T("message.experimentRecorderUnavailable"),
+                    _experimentRecorderInitializationError ?? string.Empty));
+            }
+
+            var dialog = new SaveFileDialog
+            {
+                Filter = T("dialog.experimentZipFilter"),
+                FileName = $"reactor-experiment-{_experimentRecorder.SessionId}.zip"
+            };
+
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            _experimentRecorder.RecordEvent(
+                "evidence",
+                "bundle-export-requested",
+                "success",
+                Path.GetFileName(dialog.FileName));
+            await _experimentRecorder.ExportAsync(dialog.FileName, CancellationToken.None);
+            _experimentRecorder.RecordEvent(
+                "evidence",
+                "bundle-exported",
+                "success",
+                Path.GetFileName(dialog.FileName));
+            FooterText.Text = $"{T("footer.experimentExported")}: {dialog.FileName}";
         }
         catch (Exception ex)
         {
@@ -418,6 +572,7 @@ public partial class MainWindow : Window
 
             _settings.Relay = window.ResultSettings;
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            _experimentRecorder?.UpdateSettings(_settings);
             await RebuildOrRestartMonitoringAsync();
             BindSettingsToUi();
             ApplyLanguage();
@@ -446,6 +601,11 @@ public partial class MainWindow : Window
             await SaveSettingsFromUiAsync();
             if (!ValidateBranchInterlockSetup(requireRestore: true))
             {
+                _experimentRecorder?.RecordEvent(
+                    "relay",
+                    "restore-monitoring-control",
+                    "blocked",
+                    "Engineering validation did not pass.");
                 return;
             }
 
@@ -454,9 +614,15 @@ public partial class MainWindow : Window
             SetCurrentMode(T("mode.monitoring"));
             MainTabControl.SelectedItem = MonitorTab;
             FooterText.Text = FormatBranchInterlockFooter(T("footer.monitoringControlRestored"));
+            _experimentRecorder?.RecordEvent(
+                "relay",
+                "restore-monitoring-control",
+                "command-completed",
+                "hardware_feedback=false");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("relay", "restore-monitoring-control", "failed", ex.Message);
             ShowError(ex);
         }
     }
@@ -468,6 +634,11 @@ public partial class MainWindow : Window
             await SaveSettingsFromUiAsync();
             if (!ValidateAmc2100Setup())
             {
+                _experimentRecorder?.RecordEvent(
+                    "amc2100",
+                    "set-flow-zero",
+                    "blocked",
+                    "AMC2100 validation did not pass.");
                 return;
             }
 
@@ -475,9 +646,15 @@ public partial class MainWindow : Window
             await RefreshGasFlowAsync(force: true);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = T("footer.gasStopped");
+            _experimentRecorder?.RecordEvent(
+                "amc2100",
+                "set-flow-zero",
+                "command-completed",
+                "target_ml_min=0; hardware_feedback=false");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("amc2100", "set-flow-zero", "failed", ex.Message);
             ShowError(ex);
         }
     }
@@ -490,47 +667,74 @@ public partial class MainWindow : Window
             var controller = await EnsureG2000ControlAsync();
             if (controller is null)
             {
+                _experimentRecorder?.RecordEvent(
+                    "g2000",
+                    "connect-refresh",
+                    "blocked",
+                    "G2000 validation or connection setup did not pass.");
                 return;
             }
 
             UpdateG2000Telemetry(controller.Snapshot);
             FooterText.Text = T("footer.g2000Refreshed");
+            _experimentRecorder?.RecordEvent("g2000", "connect-refresh", "software-completed");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("g2000", "connect-refresh", "failed", ex.Message);
             ShowError(ex);
         }
     }
 
     private async void G2000HvAusButton_Click(object sender, RoutedEventArgs e)
     {
-        await ExecuteG2000Async(async controller =>
+        await ExecuteG2000Async("set-hv-off", async controller =>
         {
             await controller.SetHvStateAsync(G2000HvState.HvAus, CancellationToken.None);
             FooterText.Text = T("footer.g2000HvAus");
+            _experimentRecorder?.RecordEvent(
+                "g2000",
+                "set-hv-off",
+                "command-completed",
+                "hardware_feedback=false");
         });
     }
 
     private async void G2000HvReadyButton_Click(object sender, RoutedEventArgs e)
     {
-        await ExecuteG2000Async(async controller =>
+        await ExecuteG2000Async("set-hv-ready", async controller =>
         {
             if (TryWarnAboutPendingG2000Setpoints(controller))
             {
+                _experimentRecorder?.RecordEvent(
+                    "g2000",
+                    "set-hv-ready",
+                    "blocked",
+                    "Writable setpoints have not been applied.");
                 return;
             }
 
             await controller.SetHvStateAsync(G2000HvState.HvReady, CancellationToken.None);
             FooterText.Text = T("footer.g2000HvReady");
+            _experimentRecorder?.RecordEvent(
+                "g2000",
+                "set-hv-ready",
+                "command-completed",
+                "hardware_feedback=false");
         });
     }
 
     private async void G2000HvEinButton_Click(object sender, RoutedEventArgs e)
     {
-        await ExecuteG2000Async(async controller =>
+        await ExecuteG2000Async("set-hv-on", async controller =>
         {
             if (TryWarnAboutPendingG2000Setpoints(controller))
             {
+                _experimentRecorder?.RecordEvent(
+                    "g2000",
+                    "set-hv-on",
+                    "blocked",
+                    "Writable setpoints have not been applied.");
                 return;
             }
 
@@ -539,20 +743,30 @@ public partial class MainWindow : Window
             FooterText.Text = needsLead
                 ? string.Format(CultureInfo.InvariantCulture, T("footer.g2000HvEinArmed"), _settings.Relay.G2000Can.HvReadyLeadTimeMs)
                 : T("footer.g2000HvEin");
+            _experimentRecorder?.RecordEvent(
+                "g2000",
+                "set-hv-on",
+                "command-completed",
+                $"ready_lead_ms={(needsLead ? _settings.Relay.G2000Can.HvReadyLeadTimeMs : 0)}; hardware_feedback=false");
         });
     }
 
     private async void G2000ApplySetpointsButton_Click(object sender, RoutedEventArgs e)
     {
-        await ExecuteG2000Async(async controller =>
+        await ExecuteG2000Async("apply-setpoints", async controller =>
         {
             await ApplyG2000WritableSetpointsFromUiAsync(controller, T("footer.g2000SetpointsApplied"));
+            _experimentRecorder?.RecordEvent(
+                "g2000",
+                "apply-setpoints",
+                "command-completed",
+                $"{FormatG2000SetpointsForEvidence(controller.TargetSetpoints)}; hardware_feedback=false");
         });
     }
 
     private async void G2000SetpointStepButton_Click(object sender, RoutedEventArgs e)
     {
-        await ExecuteG2000Async(async controller =>
+        await ExecuteG2000Async("adjust-setpoint", async controller =>
         {
             if (sender is not FrameworkElement { Tag: string tag })
             {
@@ -569,30 +783,53 @@ public partial class MainWindow : Window
             var current = ParseDouble(textBox.Text, parts[0]);
             textBox.Text = (current + delta).ToString(format, CultureInfo.InvariantCulture);
             await ApplyG2000WritableSetpointsFromUiAsync(controller, T("footer.g2000SetpointAdjusted"));
+            _experimentRecorder?.RecordEvent(
+                "g2000",
+                "adjust-setpoint",
+                "command-completed",
+                $"{tag}; {FormatG2000SetpointsForEvidence(controller.TargetSetpoints)}; hardware_feedback=false");
         });
     }
 
     private async void G2000StartAutomaticButton_Click(object sender, RoutedEventArgs e)
     {
-        await ExecuteG2000Async(async controller =>
+        await ExecuteG2000Async("start-automatic-sequence", async controller =>
         {
             if (!ValidateTemperatureMonitorReadyForG2000Automatic())
             {
+                _experimentRecorder?.RecordEvent(
+                    "g2000",
+                    "start-automatic-sequence",
+                    "blocked",
+                    "Temperature monitoring readiness validation did not pass.");
                 return;
             }
 
             await SaveG2000SettingsFromUiAsync();
             await controller.StartAutomaticSequenceAsync(_settings.Relay.G2000Can.StartupRecipe.Clone(), CancellationToken.None);
             FooterText.Text = T("footer.g2000AutomaticStarted");
+            _experimentRecorder?.RecordEvent(
+                "g2000",
+                "start-automatic-sequence",
+                "command-completed",
+                $"stage1_voltage_v={FormatDoubleForEvidence(_settings.Relay.G2000Can.StartupRecipe.Stage1VoltageV)}; " +
+                $"stage1_duration_ms={_settings.Relay.G2000Can.StartupRecipe.Stage1DurationMs}; " +
+                $"stage2_voltage_v={FormatDoubleForEvidence(_settings.Relay.G2000Can.StartupRecipe.Stage2VoltageV)}; " +
+                "hardware_feedback=false");
         });
     }
 
     private async void G2000StopAutomaticButton_Click(object sender, RoutedEventArgs e)
     {
-        await ExecuteG2000Async(async controller =>
+        await ExecuteG2000Async("stop-automatic-sequence", async controller =>
         {
             await controller.StopAutomaticSequenceAsync(CancellationToken.None);
             FooterText.Text = T("footer.g2000AutomaticStopped");
+            _experimentRecorder?.RecordEvent(
+                "g2000",
+                "stop-automatic-sequence",
+                "command-completed",
+                "hardware_feedback=false");
         });
     }
 
@@ -603,6 +840,11 @@ public partial class MainWindow : Window
             await SaveSettingsFromUiAsync();
             if (!ValidateAmc2100Setup())
             {
+                _experimentRecorder?.RecordEvent(
+                    "amc2100",
+                    "set-flow-target",
+                    "blocked",
+                    "AMC2100 validation did not pass.");
                 return;
             }
 
@@ -613,9 +855,15 @@ public partial class MainWindow : Window
                 CultureInfo.InvariantCulture,
                 T("footer.gasSetpointApplied"),
                 _settings.Amc2100.FallbackRestoreSetpointMlMin.ToString("0.0", CultureInfo.InvariantCulture));
+            _experimentRecorder?.RecordEvent(
+                "amc2100",
+                "set-flow-target",
+                "command-completed",
+                $"target_ml_min={FormatDoubleForEvidence(_settings.Amc2100.FallbackRestoreSetpointMlMin)}; hardware_feedback=false");
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("amc2100", "set-flow-target", "failed", ex.Message);
             ShowError(ex);
         }
     }
@@ -663,18 +911,30 @@ public partial class MainWindow : Window
             }
         }
 
-        var dataDirectory = Path.IsPathRooted(_settings.DataDirectory)
-            ? _settings.DataDirectory
-            : Path.Combine(AppContext.BaseDirectory, _settings.DataDirectory);
+        var dataDirectory = ResolveDataDirectory();
 
         _sampleLog = new CsvSampleLog(Path.Combine(dataDirectory, "temperature-history.csv"));
         _stateMachine = new InterlockStateMachine(new InterlockSettings(_settings.ThresholdC));
         var reader = new TesseractCliTemperatureReader(new WindowCapture(), new TemperatureTextParser(), _settings);
         var autoReset = new AutoResetOptions(_settings.AutoResetEnabled, _settings.RecoveryThresholdC, _settings.RecoveryStableSeconds);
-        _monitoringService = new MonitoringService(reader, CreateProcessOutputController(), _sampleLog, new SystemClock(), _stateMachine, autoReset);
+        var monitoringOutput = new ExperimentRelayFailureObserver(
+            CreateProcessOutputController(),
+            (action, outcome, details) => _experimentRecorder?.RecordEvent(
+                "interlock",
+                action,
+                outcome,
+                details));
+        _monitoringService = new MonitoringService(reader, monitoringOutput, _sampleLog, new SystemClock(), _stateMachine, autoReset);
         _monitoringService.SampleRecorded += MonitoringService_SampleRecorded;
         UpdateGasFlowDisplay();
         UpdateG2000ModeAvailability();
+    }
+
+    private string ResolveDataDirectory()
+    {
+        return Path.IsPathRooted(_settings.DataDirectory)
+            ? _settings.DataDirectory
+            : Path.Combine(AppContext.BaseDirectory, _settings.DataDirectory);
     }
 
     private void DetachMonitoringService()
@@ -816,13 +1076,20 @@ public partial class MainWindow : Window
         return _g2000Controller;
     }
 
-    private async Task ExecuteG2000Async(Func<IG2000Controller, Task> action)
+    private async Task ExecuteG2000Async(
+        string actionName,
+        Func<IG2000Controller, Task> action)
     {
         try
         {
             var controller = await EnsureG2000ControlAsync();
             if (controller is null)
             {
+                _experimentRecorder?.RecordEvent(
+                    "g2000",
+                    actionName,
+                    "blocked",
+                    "G2000 validation or connection setup did not pass.");
                 return;
             }
 
@@ -831,6 +1098,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("g2000", actionName, "failed", ex.Message);
             ShowError(ex);
         }
     }
@@ -847,6 +1115,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            _experimentRecorder?.RecordEvent("monitoring", "poll-loop", "failed", ex.Message);
             Dispatcher.Invoke(() =>
             {
                 StopMonitoring(T("footer.monitoringStopped"));
@@ -1085,6 +1354,24 @@ public partial class MainWindow : Window
 
     private void MonitoringService_SampleRecorded(object? sender, TemperatureSample sample)
     {
+        _experimentRecorder?.RecordTemperature(sample);
+        if (sample.RelayAction == RelayAction.StopSent)
+        {
+            _experimentRecorder?.RecordEvent(
+                "interlock",
+                "temperature-trip",
+                "command-completed",
+                $"temperature_c={FormatDoubleForEvidence(sample.TemperatureC)}; {sample.AlarmReason}; hardware_feedback=false");
+        }
+        else if (sample.RelayAction == RelayAction.ResetSent)
+        {
+            _experimentRecorder?.RecordEvent(
+                "interlock",
+                "automatic-recovery",
+                "command-completed",
+                $"temperature_c={FormatDoubleForEvidence(sample.TemperatureC)}; hardware_feedback=false");
+        }
+
         Dispatcher.Invoke(() =>
         {
             _lastTemperatureC = sample.TemperatureC;
@@ -1123,6 +1410,7 @@ public partial class MainWindow : Window
 
     private void G2000Controller_TelemetryUpdated(object? sender, G2000TelemetrySnapshot snapshot)
     {
+        _experimentRecorder?.RecordG2000Telemetry(snapshot);
         Dispatcher.Invoke(() => UpdateG2000Telemetry(snapshot));
     }
 
@@ -1244,12 +1532,17 @@ public partial class MainWindow : Window
 
     private void StopMonitoring(string message)
     {
+        var wasMonitoring = _monitoringCts is not null;
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
         _monitoringCts = null;
         _monitoringStartedAt = null;
         SetStatus(_stateMachine.IsTripped ? MonitorStatus.Tripped : MonitorStatus.Idle);
         FooterText.Text = message;
+        if (wasMonitoring)
+        {
+            _experimentRecorder?.RecordEvent("monitoring", "stopped", "success");
+        }
     }
 
     private void MarkMonitoringSessionStarted()
@@ -1330,6 +1623,7 @@ public partial class MainWindow : Window
         _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
         _settings.Amc2100.Normalize();
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        _experimentRecorder?.UpdateSettings(_settings);
         ApplyG2000RecoveryPolicyToController();
         UpdateGasFlowDisplay();
         UpdateG2000SettingsSummary();
@@ -1354,6 +1648,7 @@ public partial class MainWindow : Window
         _settings.Relay.G2000Can.ValidateWritableSetpoints(_settings.Relay.G2000Can.WritableSetpoints);
         _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        _experimentRecorder?.UpdateSettings(_settings);
         ApplyG2000RecoveryPolicyToController();
         UpdateG2000SettingsSummary();
     }
@@ -1398,6 +1693,7 @@ public partial class MainWindow : Window
             _settings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? "en");
             ApplyLanguage();
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            _experimentRecorder?.UpdateSettings(_settings);
         }
         catch (Exception ex)
         {
@@ -1480,6 +1776,7 @@ public partial class MainWindow : Window
         {
             UpdateSelectedG2000RecoveryPolicySetting();
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            _experimentRecorder?.UpdateSettings(_settings);
             ApplyG2000RecoveryPolicyToController();
             UpdateG2000SettingsSummary();
             G2000DiagnosticStatusText.Text = G2000ConnectionText.Text;
@@ -1517,6 +1814,7 @@ public partial class MainWindow : Window
         SubtitleText.Text = T("app.subtitle");
         FileMenu.Header = T("menu.file");
         ExportMenuItem.Header = T("menu.export");
+        ExportExperimentMenuItem.Header = T("menu.exportExperiment");
         ExitMenuItem.Header = T("menu.exit");
         ToolsMenu.Header = T("menu.tools");
         SelectRoiMenuItem.Header = T("button.selectRoi");
@@ -1555,6 +1853,7 @@ public partial class MainWindow : Window
         ResetButton.Content = T("button.reset");
         SelectRoiButton.Content = T("button.selectRoi");
         ExportButton.Content = T("button.export");
+        ExportExperimentButton.Content = T("button.exportExperiment");
         ClearHistoryButton.Content = T("button.clearHistory");
         TestRelayButton.Content = T("button.disconnectAll");
         TestRelayResetButton.Content = T("button.connectAll");
@@ -1664,6 +1963,7 @@ public partial class MainWindow : Window
         SetToolTip(ResetButton, "tooltip.reset");
         SetToolTip(SelectRoiButton, "tooltip.selectRoi");
         SetToolTip(ExportButton, "tooltip.export");
+        SetToolTip(ExportExperimentButton, "tooltip.exportExperiment");
         SetToolTip(ClearHistoryButton, "tooltip.clearHistory");
         SetToolTip(WindowTitleBox, "tooltip.windowTitle");
         SetToolTip(TesseractPathBox, "tooltip.tesseractPath");
@@ -1711,6 +2011,7 @@ public partial class MainWindow : Window
         SetToolTip(ToolsMenu, "tooltip.menuTools");
         SetToolTip(HelpMenu, "tooltip.menuHelp");
         SetToolTip(ExportMenuItem, "tooltip.export");
+        SetToolTip(ExportExperimentMenuItem, "tooltip.exportExperiment");
         SetToolTip(SelectRoiMenuItem, "tooltip.selectRoi");
         SetToolTip(GuideMenuItem, "tooltip.openGuide");
         SetToolTip(AdvancedSettingsMenuItem, "tooltip.advancedSettings");
@@ -1976,6 +2277,11 @@ public partial class MainWindow : Window
         if (!force && !ValidateAmcPortExistsSilently())
         {
             _lastGasFlowMlMin = null;
+            _experimentRecorder?.RecordGasFlow(
+                null,
+                enabled: true,
+                "unavailable",
+                "Configured AMC2100 serial port was not found.");
             UpdateGasFlowDisplay();
             return;
         }
@@ -1984,10 +2290,16 @@ public partial class MainWindow : Window
         try
         {
             _lastGasFlowMlMin = await CreateGasFlowController().ReadActualFlowAsync(CancellationToken.None);
+            _experimentRecorder?.RecordGasFlow(
+                _lastGasFlowMlMin,
+                enabled: true,
+                "success",
+                force ? "forced read" : "periodic read");
         }
-        catch
+        catch (Exception ex)
         {
             _lastGasFlowMlMin = null;
+            _experimentRecorder?.RecordGasFlow(null, enabled: true, "error", ex.Message);
         }
         finally
         {
@@ -2045,6 +2357,13 @@ public partial class MainWindow : Window
         SetStatus(MonitorStatus.Monitoring);
         SetCurrentMode(T("mode.monitoring"));
         FooterText.Text = footerText;
+        _experimentRecorder?.RecordEvent(
+            "monitoring",
+            "started",
+            "success",
+            $"threshold_c={FormatDoubleForEvidence(_settings.ThresholdC)}; " +
+            $"recovery_c={FormatDoubleForEvidence(_settings.RecoveryThresholdC)}; " +
+            $"poll_interval_ms={_settings.PollIntervalMs}");
         _ = Task.Run(() => RunMonitoringLoopAsync(_monitoringCts.Token));
     }
 
@@ -2071,6 +2390,13 @@ public partial class MainWindow : Window
         SetStatus(MonitorStatus.Monitoring);
         SetCurrentMode(T("mode.monitoring"));
         FooterText.Text = T("footer.monitoringRestarted");
+        _experimentRecorder?.RecordEvent(
+            "monitoring",
+            "restarted",
+            "success",
+            $"threshold_c={FormatDoubleForEvidence(_settings.ThresholdC)}; " +
+            $"recovery_c={FormatDoubleForEvidence(_settings.RecoveryThresholdC)}; " +
+            $"poll_interval_ms={_settings.PollIntervalMs}");
         _ = Task.Run(() => RunMonitoringLoopAsync(_monitoringCts.Token));
         await RefreshGasFlowAsync(force: true);
     }
@@ -2382,6 +2708,7 @@ public partial class MainWindow : Window
 
     private void ShowError(Exception ex)
     {
+        _experimentRecorder?.RecordEvent("application", "error", "error", ex.Message);
         FooterText.Text = ex.Message;
         MessageBox.Show(this, ex.Message, T("app.title"), MessageBoxButton.OK, MessageBoxImage.Error);
     }
@@ -2390,6 +2717,20 @@ public partial class MainWindow : Window
     {
         FooterText.Text = message;
         MessageBox.Show(this, message, T("message.setupRequiredTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private static string FormatDoubleForEvidence(double? value)
+    {
+        return value?.ToString("G17", CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    private static string FormatG2000SetpointsForEvidence(G2000WritableSetpoints setpoints)
+    {
+        return $"voltage_v={FormatDoubleForEvidence(setpoints.VoltageV)}; " +
+               $"frequency_khz={FormatDoubleForEvidence(setpoints.FrequencyKhz)}; " +
+               $"duty_percent={FormatDoubleForEvidence(setpoints.DutyPercent)}; " +
+               $"ton_ms={FormatDoubleForEvidence(setpoints.TonMs)}; " +
+               $"toff_ms={FormatDoubleForEvidence(setpoints.ToffMs)}";
     }
 
     private sealed record ChannelUi(

@@ -405,6 +405,49 @@ timestamp,temperature_c,raw_ocr_text,status,alarm_reason,relay_action,screenshot
 
 Use `Export CSV` to copy the current CSV to a selected location.
 
+## Experiment Evidence Recording
+
+In addition to the existing temperature-history CSV, the app automatically creates one
+report-oriented evidence session on every application start:
+
+```text
+data\experiment-sessions\<UTC timestamp>-<session id>\
+```
+
+The session is a sidecar recorder. It observes the existing monitoring and control events
+but does not participate in temperature evaluation, relay operation, G2000 control, or
+AMC2100 control. A recording failure therefore does not change the interlock decision path.
+
+Each session contains:
+
+- `temperature-samples.csv`: session-only OCR temperature samples, status, alarm reason, relay action, and ROI.
+- `events.csv`: monitoring lifecycle, temperature trips and recoveries, engineering relay actions, G2000 commands, AMC2100 commands, and UI errors. Hardware-control rows use `command-completed` plus `hardware_feedback=false`; this means the software call returned without an exception, not that physical movement was independently verified.
+- `g2000-telemetry.csv`: G2000 state, fault data, targets, actual values, automatic stage, trip latch, and raw CAN frames. Normal telemetry is sampled at most once per second, while communication, fault, trip, HV, mode, automatic-stage, and target-setpoint changes are recorded immediately.
+- `gas-flow.csv`: AMC2100 periodic and forced actual-flow reads in `actual_flow_ml_min`, including unavailable/error outcomes.
+- `settings-start.json` and `settings-latest.json`: settings at application start and the latest saved settings.
+- `manifest.json`: session ID, software version, operating system, framework, architecture, and timestamps.
+- `report-summary.json`: sample counts, valid-reading rate, temperature minimum/maximum/average, automatic trip/recovery counts, engineering open/close command counts, manual-reset, failed-command, blocked-command, and monitoring-loop-failure counts, telemetry counts, recording failures, and bounded-queue drop counts.
+- `manual-fields.md`: a checklist for laboratory facts that software cannot determine, such as emissivity, calibration, reactor material, gas species, environmental conditions, and setup photographs.
+
+Use `Export Experiment Bundle` in the File menu or Monitor page to flush the current
+background recording queue and create a ZIP containing the complete current session. The
+existing `Export CSV` action remains unchanged.
+
+The evidence bundle records software-observed behaviour. It is not a substitute for an
+independent temperature calibration, verified hardware feedback, or a certified safety
+assessment.
+
+Failed automatic relay Stop/Reset calls are observed at the controller boundary and increment
+`FailedControlCommandCount`. Other polling failures, such as OCR or the existing history-CSV
+writer failing, are recorded separately as `monitoring / poll-loop / failed` and increment
+`MonitoringLoopFailureCount`. The existing safety-control implementation is unchanged, so
+either failure may occur before that polling cycle can publish its temperature sample.
+
+The evidence queue is bounded so that a stalled disk cannot consume memory without limit.
+If the writer cannot keep up, `DroppedRecordCount` and `DroppedTelemetryCount` expose the
+loss in the next summary checkpoint. Application shutdown waits at most two seconds for
+remaining evidence; safety and control shutdown are never held indefinitely by logging.
+
 ## Troubleshooting
 
 ### HikmicroAnalyzer window not found
