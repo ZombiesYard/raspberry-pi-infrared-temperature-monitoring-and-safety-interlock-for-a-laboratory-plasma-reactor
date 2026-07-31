@@ -24,7 +24,8 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
     private const string SettingsLatestFileName = "settings-latest.json";
     private const string ManifestFileName = "manifest.json";
     private const string SummaryFileName = "report-summary.json";
-    private const string ManualFieldsFileName = "manual-fields.md";
+    private const string LabProfileFileName = "lab-profile.json";
+    private const string ExperimentContextFileName = "experiment-context.md";
     private const int QueueCapacity = 4096;
     private static readonly TimeSpan G2000PeriodicInterval = TimeSpan.FromSeconds(1);
 
@@ -57,30 +58,39 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         G2000FileName,
         GasFlowFileName,
         SummaryFileName,
-        ManualFieldsFileName
+        LabProfileFileName,
+        ExperimentContextFileName
     ];
 
     private readonly Channel<RecorderCommand> _channel;
     private readonly Task _writerTask;
     private readonly string _softwareVersion;
+    private readonly LabProfile _labProfile;
     private readonly RecorderStatistics _statistics = new();
     private readonly object _g2000SamplingGate = new();
     private G2000SignificantState? _lastG2000State;
     private DateTimeOffset _lastG2000RecordedAt = DateTimeOffset.MinValue;
     private long _droppedRecordCount;
     private long _droppedTelemetryCount;
+    private long _meaningfulRecordCount;
     private int _accepting = 1;
+    private string _latestSettingsJson;
+    private string _finalizationReason = string.Empty;
 
     private ExperimentSessionRecorder(
         string sessionId,
         string sessionDirectory,
         DateTimeOffset startedAt,
-        string softwareVersion)
+        string softwareVersion,
+        LabProfile labProfile,
+        string settingsJson)
     {
         SessionId = sessionId;
         SessionDirectory = sessionDirectory;
         StartedAt = startedAt;
         _softwareVersion = softwareVersion;
+        _labProfile = labProfile;
+        _latestSettingsJson = settingsJson;
         _channel = Channel.CreateBounded<RecorderCommand>(new BoundedChannelOptions(QueueCapacity)
         {
             SingleReader = true,
@@ -97,6 +107,8 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
 
     public DateTimeOffset StartedAt { get; }
 
+    public bool HasActivity => Interlocked.Read(ref _meaningfulRecordCount) > 0;
+
     public static async Task<ExperimentSessionRecorder> CreateAsync(
         string dataDirectory,
         AppSettings settings,
@@ -111,6 +123,8 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         var sessionDirectory = Path.Combine(dataDirectory, "experiment-sessions", sessionId);
         Directory.CreateDirectory(sessionDirectory);
 
+        var labProfile = await LabProfileStore.LoadOrCreateAsync(dataDirectory, cancellationToken)
+            .ConfigureAwait(false);
         var settingsJson = Serialize(settings);
         await File.WriteAllTextAsync(
             Path.Combine(sessionDirectory, SettingsStartFileName),
@@ -143,8 +157,19 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
             Utf8WithoutBom,
             cancellationToken).ConfigureAwait(false);
         await File.WriteAllTextAsync(
-            Path.Combine(sessionDirectory, ManualFieldsFileName),
-            ManualFieldsTemplate,
+            Path.Combine(sessionDirectory, LabProfileFileName),
+            LabProfileStore.Serialize(labProfile),
+            Utf8WithoutBom,
+            cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(
+            Path.Combine(sessionDirectory, ExperimentContextFileName),
+            LabProfileStore.RenderExperimentContext(
+                labProfile,
+                settings,
+                sessionId,
+                startedAt,
+                endedAt: null,
+                finalizationReason: string.Empty),
             Utf8WithoutBom,
             cancellationToken).ConfigureAwait(false);
 
@@ -152,7 +177,9 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
             sessionId,
             sessionDirectory,
             startedAt,
-            string.IsNullOrWhiteSpace(softwareVersion) ? "unknown" : softwareVersion);
+            string.IsNullOrWhiteSpace(softwareVersion) ? "unknown" : softwareVersion,
+            labProfile,
+            settingsJson);
 
         try
         {
@@ -172,7 +199,7 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         try
         {
             ArgumentNullException.ThrowIfNull(sample);
-            TryEnqueue(new TemperatureCommand(sample));
+            TryEnqueue(new TemperatureCommand(sample), meaningfulActivity: true);
         }
         catch
         {
@@ -181,15 +208,24 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
     }
 
     public void RecordEvent(string category, string action, string outcome = "", string details = "")
+        => RecordEventAt(DateTimeOffset.UtcNow, category, action, outcome, details);
+
+    internal void RecordEventAt(
+        DateTimeOffset capturedAt,
+        string category,
+        string action,
+        string outcome = "",
+        string details = "")
     {
         try
         {
+            var meaningfulActivity = IsMeaningfulActivity(category, action);
             TryEnqueue(new EventCommand(
-                DateTimeOffset.UtcNow,
+                capturedAt,
                 category ?? string.Empty,
                 action ?? string.Empty,
                 outcome ?? string.Empty,
-                details ?? string.Empty));
+                details ?? string.Empty), meaningfulActivity: meaningfulActivity);
         }
         catch
         {
@@ -198,11 +234,15 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
     }
 
     public void RecordG2000Telemetry(G2000TelemetrySnapshot snapshot)
+        => RecordG2000TelemetryAt(snapshot, DateTimeOffset.UtcNow);
+
+    internal void RecordG2000TelemetryAt(
+        G2000TelemetrySnapshot snapshot,
+        DateTimeOffset capturedAt)
     {
         try
         {
             ArgumentNullException.ThrowIfNull(snapshot);
-            var capturedAt = DateTimeOffset.UtcNow;
             var clonedSnapshot = snapshot.Clone();
             var significantState = G2000SignificantState.From(clonedSnapshot);
 
@@ -236,12 +276,20 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         double? actualFlow,
         bool enabled,
         string outcome,
+        string details = "") => RecordGasFlowAt(
+            DateTimeOffset.UtcNow, actualFlow, enabled, outcome, details);
+
+    internal void RecordGasFlowAt(
+        DateTimeOffset capturedAt,
+        double? actualFlow,
+        bool enabled,
+        string outcome,
         string details = "")
     {
         try
         {
             TryEnqueue(new GasFlowCommand(
-                DateTimeOffset.UtcNow,
+                capturedAt,
                 enabled,
                 actualFlow,
                 outcome ?? string.Empty,
@@ -301,6 +349,20 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task FinalizeAndExportAsync(
+        string destinationZipPath,
+        string finalizationReason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationZipPath);
+        _finalizationReason = string.IsNullOrWhiteSpace(finalizationReason)
+            ? "unspecified"
+            : finalizationReason.Trim();
+        StopAccepting();
+        await _writerTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CreateArchive(Path.GetFullPath(destinationZipPath), cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         StopAccepting();
@@ -336,7 +398,10 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         }
     }
 
-    private bool TryEnqueue(RecorderCommand command, bool isTelemetry = false)
+    private bool TryEnqueue(
+        RecorderCommand command,
+        bool isTelemetry = false,
+        bool meaningfulActivity = false)
     {
         if (Volatile.Read(ref _accepting) == 0)
         {
@@ -345,6 +410,11 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
 
         if (_channel.Writer.TryWrite(command))
         {
+            if (meaningfulActivity)
+            {
+                Interlocked.Increment(ref _meaningfulRecordCount);
+            }
+
             return true;
         }
 
@@ -466,6 +536,7 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
                 break;
 
             case SettingsCommand settings:
+                _latestSettingsJson = settings.Json;
                 await WriteTextAtomicallyAsync(
                     Path.Combine(SessionDirectory, SettingsLatestFileName),
                     settings.Json).ConfigureAwait(false);
@@ -523,8 +594,10 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
             SoftwareVersion = _softwareVersion,
             OperatingSystem = RuntimeInformation.OSDescription,
             Framework = RuntimeInformation.FrameworkDescription,
-            ProcessArchitecture = RuntimeInformation.ProcessArchitecture.ToString()
+            ProcessArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
+            FinalizationReason = endedAtUtc.HasValue ? _finalizationReason : string.Empty
         };
+        summary.FinalizationReason = endedAtUtc.HasValue ? _finalizationReason : string.Empty;
 
         await WriteTextAtomicallyAsync(
             Path.Combine(SessionDirectory, SummaryFileName),
@@ -532,6 +605,27 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         await WriteTextAtomicallyAsync(
             Path.Combine(SessionDirectory, ManifestFileName),
             Serialize(manifest)).ConfigureAwait(false);
+
+        AppSettings contextSettings;
+        try
+        {
+            contextSettings = JsonSerializer.Deserialize<AppSettings>(_latestSettingsJson, JsonOptions)
+                ?? new AppSettings();
+        }
+        catch
+        {
+            contextSettings = new AppSettings();
+        }
+
+        await WriteTextAtomicallyAsync(
+            Path.Combine(SessionDirectory, ExperimentContextFileName),
+            LabProfileStore.RenderExperimentContext(
+                _labProfile,
+                contextSettings,
+                SessionId,
+                StartedAt,
+                endedAtUtc,
+                endedAtUtc.HasValue ? _finalizationReason : string.Empty)).ConfigureAwait(false);
     }
 
     private void CreateArchive(string fullDestinationPath, CancellationToken cancellationToken)
@@ -715,6 +809,17 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
     private static string Serialize<T>(T value)
     {
         return JsonSerializer.Serialize(value, JsonOptions);
+    }
+
+    private static bool IsMeaningfulActivity(string? category, string? action)
+    {
+        if (string.Equals(category, "application", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(category, "evidence", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(category) || !string.IsNullOrWhiteSpace(action);
     }
 
     private abstract record RecorderCommand;
@@ -941,6 +1046,8 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         public string Framework { get; set; } = string.Empty;
 
         public string ProcessArchitecture { get; set; } = string.Empty;
+
+        public string FinalizationReason { get; set; } = string.Empty;
     }
 
     private sealed class ExperimentReportSummary
@@ -996,34 +1103,7 @@ public sealed class ExperimentSessionRecorder : IAsyncDisposable
         public long DroppedRecordCount { get; set; }
 
         public long DroppedTelemetryCount { get; set; }
+
+        public string FinalizationReason { get; set; } = string.Empty;
     }
-
-    private const string ManualFieldsTemplate =
-        """
-        # Manual laboratory fields
-
-        Complete these fields after each laboratory run. They cannot be inferred reliably by the software.
-
-        - Experiment date, location, operator, and supervising person:
-        - Gas species, gas supply settings, and intended process conditions:
-        - HIKMICRO camera nameplate/model confirmation:
-        - Camera emissivity, reflected temperature, distance, and other measurement settings:
-        - Reference thermometer and temperature-calibration measurements:
-        - Reactor material, ceramic base construction, adhesive, and component dimensions:
-        - Ambient temperature, humidity, lighting, and reflective surfaces:
-        - Camera-to-reactor distance and viewing angle:
-        - Photographs of the reactor, camera position, relay wiring, G2000 terminals, and complete setup:
-        - G2000 model/serial number, firmware, CAN adapter, node ID, and termination:
-        - DSD TECH SH-UR04A relay serial number and verified normally-closed contact mapping:
-        - AMC2100 model/serial number, gas range, and calibration date:
-        - Historical reactor damage records or photographs:
-        - Supervisor confirmation of whether earlier failures were caused by thermal stress, electrical arcing, or both:
-        - Any unexpected observation, aborted run, maintenance action, or deviation from the planned procedure:
-
-        ## Report-use notes
-
-        Record the safe threshold and the engineering justification separately from the historical failure
-        temperature. A successful software event log demonstrates observed behaviour, but it does not replace
-        an independent temperature calibration or a formally assessed safety function.
-        """;
 }

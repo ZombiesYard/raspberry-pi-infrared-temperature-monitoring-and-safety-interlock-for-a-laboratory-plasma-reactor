@@ -24,5 +24,7 @@ public sealed class AppSettings
 
     public Amc2100Settings Amc2100 { get; set; } = new();
 
+    public ExperimentUploadSettings ExperimentUpload { get; set; } = new();
+
     public string DataDirectory { get; set; } = "data";
 }
