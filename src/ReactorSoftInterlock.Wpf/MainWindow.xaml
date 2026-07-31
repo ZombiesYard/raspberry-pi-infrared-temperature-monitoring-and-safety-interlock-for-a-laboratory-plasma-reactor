@@ -89,8 +89,9 @@
       </MenuItem>
       <MenuItem x:Name="ToolsMenu" Header="_Tools">
         <MenuItem x:Name="SelectRoiMenuItem" Header="Select ROI" Click="SelectRoiButton_Click" />
-        <MenuItem x:Name="GuideMenuItem" Header="Open Lab Guide" Click="OpenGuideButton_Click" />
-        <MenuItem x:Name="AdvancedSettingsMenuItem" Header="Advanced Settings" Click="AdvancedSettingsMenuItem_Click" />
+       <MenuItem x:Name="GuideMenuItem" Header="Open Lab Guide" Click="OpenGuideButton_Click" />
+       <MenuItem x:Name="AdvancedSettingsMenuItem" Header="Advanced Settings" Click="AdvancedSettingsMenuItem_Click" />
+        <MenuItem x:Name="GitLabUploadSettingsMenuItem" Header="GitLab Upload Settings" Click="GitLabUploadSettingsMenuItem_Click" />
       </MenuItem>
       <MenuItem x:Name="HelpMenu" Header="_Help">
         <MenuItem x:Name="WiringNotesMenuItem" Header="Wiring Notes" Click="OpenGuideButton_Click" />
@@ -186,9 +187,17 @@
                     <Button x:Name="StopButton" Style="{StaticResource SecondaryButtonStyle}" Content="Stop" Click="StopButton_Click" />
                     <Button x:Name="ResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Reset" Click="ResetButton_Click" />
                     <Button x:Name="SelectRoiButton" Style="{StaticResource SecondaryButtonStyle}" Content="Select ROI" Click="SelectRoiButton_Click" />
-                    <Button x:Name="ExportButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export CSV" Click="ExportButton_Click" />
-                    <Button x:Name="ExportExperimentButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export Experiment Bundle" Click="ExportExperimentButton_Click" />
-                    <Separator Margin="0,6,0,12" />
+                   <Button x:Name="ExportButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export CSV" Click="ExportButton_Click" />
+                   <Button x:Name="ExportExperimentButton" Style="{StaticResource SecondaryButtonStyle}" Content="Export Experiment Bundle" Click="ExportExperimentButton_Click" />
+                    <Grid Margin="0,4,0,8">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock x:Name="UploadStatusLabel" Grid.Column="0" Text="Experiment upload:" FontWeight="SemiBold" Margin="0,0,8,0" />
+                      <TextBlock x:Name="UploadStatusText" Grid.Column="1" Text="Disabled" TextWrapping="Wrap" />
+                    </Grid>
+                   <Separator Margin="0,6,0,12" />
                     <Button x:Name="TestRelayButton" Style="{StaticResource SecondaryButtonStyle}" Content="Disconnect All Interlocks" Click="TestRelayButton_Click" />
                     <Button x:Name="TestRelayResetButton" Style="{StaticResource SecondaryButtonStyle}" Content="Connect All Interlocks" Click="TestRelayResetButton_Click" />
                   </StackPanel>

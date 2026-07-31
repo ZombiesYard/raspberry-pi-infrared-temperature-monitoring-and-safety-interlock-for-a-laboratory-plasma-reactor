@@ -407,18 +407,21 @@ Use `Export CSV` to copy the current CSV to a selected location.
 
 ## Experiment Evidence Recording
 
-In addition to the existing temperature-history CSV, the app automatically creates one
-report-oriented evidence session on every application start:
+In addition to the existing temperature-history CSV, the app automatically records
+report-oriented evidence without requiring an Export action. Every Start/Stop monitoring
+cycle is an independent run. Engineering, G2000, or AMC2100 activity outside monitoring is
+kept in an ambient run: activity before a new Start is finalized separately, while remaining
+activity is packaged as a final run when the application exits. An unused run is skipped.
 
 ```text
 data\experiment-sessions\<UTC timestamp>-<session id>\
 ```
 
-The session is a sidecar recorder. It observes the existing monitoring and control events
+The run recorder is a sidecar. It observes the existing monitoring and control events
 but does not participate in temperature evaluation, relay operation, G2000 control, or
 AMC2100 control. A recording failure therefore does not change the interlock decision path.
 
-Each session contains:
+Each run contains:
 
 - `temperature-samples.csv`: session-only OCR temperature samples, status, alarm reason, relay action, and ROI.
 - `events.csv`: monitoring lifecycle, temperature trips and recoveries, engineering relay actions, G2000 commands, AMC2100 commands, and UI errors. Hardware-control rows use `command-completed` plus `hardware_feedback=false`; this means the software call returned without an exception, not that physical movement was independently verified.
@@ -427,11 +430,45 @@ Each session contains:
 - `settings-start.json` and `settings-latest.json`: settings at application start and the latest saved settings.
 - `manifest.json`: session ID, software version, operating system, framework, architecture, and timestamps.
 - `report-summary.json`: sample counts, valid-reading rate, temperature minimum/maximum/average, automatic trip/recovery counts, engineering open/close command counts, manual-reset, failed-command, blocked-command, and monitoring-loop-failure counts, telemetry counts, recording failures, and bounded-queue drop counts.
-- `manual-fields.md`: a checklist for laboratory facts that software cannot determine, such as emissivity, calibration, reactor material, gas species, environmental conditions, and setup photographs.
+- `lab-profile.json`: an immutable snapshot of the persistent laboratory profile used for this run. The master profile is created once at `data\lab-profile.json`; known equipment and wiring facts are prefilled, while unknown measurements remain explicitly `not_recorded` or `not_confirmed`.
+- `experiment-context.md`: a report-oriented rendering of the run ID, timestamps, finalization reason, threshold and recovery policy, OCR ROI, G2000 recipe, AMC2100 state, fixed laboratory facts, and remaining evidence gaps.
 
-Use `Export Experiment Bundle` in the File menu or Monitor page to flush the current
-background recording queue and create a ZIP containing the complete current session. The
-existing `Export CSV` action remains unchanged.
+Stopping monitoring automatically flushes and finalizes the run, creates a short-name ZIP
+such as `exp-20260731-142530-a1b2c3d4.zip` under `data\experiment-bundles\`, and places an
+upload work item in `data\experiment-upload-outbox\pending\` when automatic upload is enabled. The next run becomes active
+before the old run is compressed. Events arriving during the atomic handoff are buffered and
+replayed only into the new run, so they cannot be written to the old ZIP. A
+`bundle-checkpoint.json` beside the raw run records the local size and SHA-256. If the app
+or computer exits during finalization, the next startup recovers any recorded run without a
+valid checkpoint and packages it again.
+
+`Export Experiment Bundle` remains available as an optional manual snapshot of the current
+run, and the existing `Export CSV` action is unchanged. Neither button is required for
+automatic recording or automatic run packaging.
+
+When automatic upload is enabled, the background worker uploads pending ZIP files to the
+configured GitLab Generic Package Registry. It checks the remote run ID, file name, size,
+and SHA-256 before PUT, so a timeout after a completed upload does not create a duplicate.
+Retryable failures wait 30 seconds, 2 minutes, and 10 minutes, then 30 minutes; GitLab 429
+responses use `Retry-After`. Authentication failures wait for a credential update. Corrupt
+outbox items, missing or changed local ZIPs, and permanent request errors move to
+`experiment-upload-outbox\failed\` instead of retrying forever. Uploaders acquire an atomic
+lease in `experiment-upload-outbox\uploading\`, preventing two application processes from
+sending the same pending item concurrently. Work survives application restarts. Successful
+uploads create `upload-receipt.json` and move the work item to
+`experiment-upload-outbox\sent\`.
+
+Configure the GitLab URL, project ID, package name, automatic-upload switch, and PAT under
+`Tools -> GitLab Upload Settings`. The PAT is stored only in Windows Credential Manager
+under `ReactorSoftInterlock/GitLab/<normalized-host>/<project-id>`. Only HTTPS URLs without
+embedded credentials, query strings, or fragments are accepted, and HTTP redirects are not
+followed. Changing the host or project therefore requires a separately stored credential.
+The PAT needs GitLab's `api` scope for Generic Package Registry upload and lookup. Rotate an
+expired PAT by storing the replacement in the settings window; use `Clear Credential` before
+revoking or moving away from a target. The PAT is never serialized to `appsettings.json`,
+logs, raw run directories, evidence ZIP files, or release packages. The Monitor page shows
+only the current upload state: Disabled, Missing credential, Packaging, Pending, Uploading,
+Uploaded, or Failed.
 
 The evidence bundle records software-observed behaviour. It is not a substitute for an
 independent temperature calibration, verified hardware feedback, or a certified safety
@@ -445,8 +482,15 @@ either failure may occur before that polling cycle can publish its temperature s
 
 The evidence queue is bounded so that a stalled disk cannot consume memory without limit.
 If the writer cannot keep up, `DroppedRecordCount` and `DroppedTelemetryCount` expose the
-loss in the next summary checkpoint. Application shutdown waits at most two seconds for
-remaining evidence; safety and control shutdown are never held indefinitely by logging.
+loss in the next summary checkpoint. Application shutdown gives local finalization a five-second
+best-effort window and then closes; unfinished raw evidence is recovered on the next startup. Network upload
+is never awaited by the interlock or control path.
+
+For a release, run `scripts\Package-Release.ps1 -ZipPath <short-name.zip>`. The script itself
+publishes into a new random temporary directory, validates every output file against the known
+software/runtime allowlist, rejects credential-like settings, and refuses to overwrite an
+existing ZIP. This prevents lab evidence or ad-hoc token files from being copied into a public
+software release.
 
 ## Troubleshooting
 

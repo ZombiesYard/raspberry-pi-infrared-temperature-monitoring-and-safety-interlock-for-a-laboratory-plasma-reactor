@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.IO.Ports;
+using System.Net.Http;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -33,13 +35,18 @@ public partial class MainWindow : Window
     private SettingsStore _settingsStore = null!;
     private AppSettings _settings = null!;
     private CsvSampleLog _sampleLog = null!;
-    private ExperimentSessionRecorder? _experimentRecorder;
+    private ExperimentEvidenceCoordinator? _experimentRecorder;
     private string? _experimentRecorderInitializationError;
+    private Task<ExperimentEvidenceCoordinator>? _experimentRecorderCreationTask;
+    private CancellationTokenSource? _experimentRecorderInitializationCts;
+    private readonly IExperimentCredentialStore _experimentCredentialStore = new WindowsExperimentCredentialStore();
+    private HttpClient? _experimentUploadHttpClient;
     private InterlockStateMachine _stateMachine = null!;
     private MonitoringService? _monitoringService;
     private IRelayBankController? _relayBankController;
     private IG2000Controller? _g2000Controller;
     private CancellationTokenSource? _monitoringCts;
+    private Task? _monitoringTask;
     private readonly DispatcherTimer _gasFlowTimer = new();
     private double? _lastTemperatureC;
     private DateTimeOffset? _lastTemperatureSampleAt;
@@ -50,19 +57,26 @@ public partial class MainWindow : Window
     private string? _lastG2000ConnectionError;
     private string? _relayRuntimeKey;
     private readonly SemaphoreSlim _branchInterlockGate = new(1, 1);
+    private readonly SemaphoreSlim _monitoringLifecycleGate = new(1, 1);
     private bool _isBindingSettings;
     private bool _isRefreshingGasFlow;
     private double _monitorLeftScrollOffset;
     private bool _isRestoringMonitorLeftScroll;
+    private bool _shutdownPreparing;
+    private bool _shutdownReady;
+    private bool _isRunFinalizing;
+    private bool _initializationComplete;
 
     public MainWindow()
     {
         InitializeComponent();
+        IsEnabled = false;
         HistoryGrid.ItemsSource = _history;
         InitializeChannelUi();
         _gasFlowTimer.Interval = TimeSpan.FromSeconds(1);
         _gasFlowTimer.Tick += GasFlowTimer_Tick;
         Loaded += MainWindow_Loaded;
+        Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
     }
 
@@ -72,6 +86,11 @@ public partial class MainWindow : Window
         {
             _settingsStore = new SettingsStore(_settingsPath);
             _settings = await _settingsStore.LoadAsync(CancellationToken.None);
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             InitializeG2000OptionLists();
             LanguageBox.ItemsSource = new[]
             {
@@ -84,13 +103,34 @@ public partial class MainWindow : Window
             ApplyLanguage();
             BuildServices();
             await InitializeExperimentRecorderAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             await InitializeG2000ControllerAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             SetAllChannelStates(null);
             SetCurrentMode(T("mode.monitoring"));
             UpdateGasFlowDisplay();
             _gasFlowTimer.Start();
             await LoadRecentHistoryAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             DrawTemperatureChart();
+            _initializationComplete = true;
+            _experimentRecorderCreationTask = null;
+            _experimentRecorderInitializationCts?.Dispose();
+            _experimentRecorderInitializationCts = null;
+            IsEnabled = true;
+            UpdateRunBoundaryButtons();
             Activate();
         }
         catch (Exception ex)
@@ -113,15 +153,107 @@ public partial class MainWindow : Window
 
         (_relayBankController as IDisposable)?.Dispose();
 
+        try { _experimentRecorder?.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
+        _experimentRecorder = null;
+        _experimentUploadHttpClient?.Dispose();
+        _experimentUploadHttpClient = null;
+    }
+
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_shutdownReady)
+        {
+            return;
+        }
+        if (!_initializationComplete)
+        {
+            e.Cancel = true;
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
+            _shutdownPreparing = true;
+            IsEnabled = false;
+            _experimentRecorderInitializationCts?.Cancel();
+            var creationTask = _experimentRecorderCreationTask;
+            var startupCoordinator = _experimentRecorder;
+            using var initializationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            if (startupCoordinator is null && creationTask is not null)
+            {
+                try
+                {
+                    startupCoordinator = await creationTask.WaitAsync(initializationTimeout.Token);
+                }
+                catch
+                {
+                    _ = DisposeLateExperimentRecorderAsync(creationTask);
+                }
+            }
+
+            if (startupCoordinator is not null)
+            {
+                try
+                {
+                    await startupCoordinator.DisposeAsync().AsTask().WaitAsync(initializationTimeout.Token);
+                }
+                catch
+                {
+                    // Startup recovery owns any session that cannot close within the limit.
+                }
+            }
+
+            _experimentRecorder = null;
+            _experimentRecorderInitializationCts?.Dispose();
+            _experimentRecorderInitializationCts = null;
+            _shutdownReady = true;
+            _ = Dispatcher.BeginInvoke(Close);
+            return;
+        }
+        if (_settings is null || _experimentRecorder is null)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (_shutdownPreparing)
+        {
+            return;
+        }
+
+        _shutdownPreparing = true;
+        IsEnabled = false;
+        _gasFlowTimer.Stop();
+        var monitoringTask = StopMonitoring(T("footer.monitoringStopped"));
+        var coordinator = _experimentRecorder;
+        coordinator.RecordEvent("application", "session-stopped", "success");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var lifecycleAcquired = false;
         try
         {
-            _experimentRecorder?.RecordEvent("application", "session-stopped", "success");
-            _experimentRecorder?.CompleteAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+            await AwaitMonitoringTaskAsync(monitoringTask, timeout.Token);
+            await _monitoringLifecycleGate.WaitAsync(timeout.Token);
+            lifecycleAcquired = true;
+            await coordinator.FinalizeRunAsync(
+                    _settings,
+                    "application-exit",
+                    startNextRun: false,
+                    timeout.Token)
+                .WaitAsync(timeout.Token);
         }
         catch
         {
-            // Evidence shutdown must not prevent the application from closing.
+            // A dirty run remains recoverable from its session directory.
         }
+
+        try { await coordinator.DisposeAsync().AsTask().WaitAsync(timeout.Token); } catch { }
+        if (lifecycleAcquired)
+        {
+            _monitoringLifecycleGate.Release();
+        }
+        _experimentRecorder = null;
+        _shutdownReady = true;
+        _ = Dispatcher.BeginInvoke(Close);
     }
 
     private async Task InitializeExperimentRecorderAsync()
@@ -129,39 +261,68 @@ public partial class MainWindow : Window
         try
         {
             var dataDirectory = ResolveDataDirectory();
-            var creationTask = Task.Run(() => ExperimentSessionRecorder.CreateAsync(
+            _experimentUploadHttpClient = new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false
+            })
+            {
+                Timeout = TimeSpan.FromSeconds(_settings.ExperimentUpload.HttpTimeoutSeconds)
+            };
+            var uploader = new GitLabExperimentUploader(
+                _experimentUploadHttpClient,
+                _experimentCredentialStore);
+            _experimentRecorderInitializationCts = new CancellationTokenSource();
+            var creationTask = Task.Run(() => ExperimentEvidenceCoordinator.CreateAsync(
                 dataDirectory,
                 _settings,
                 GetSoftwareVersion(),
-                CancellationToken.None));
-            if (await Task.WhenAny(creationTask, Task.Delay(TimeSpan.FromSeconds(2))) != creationTask)
+                uploader,
+                _experimentRecorderInitializationCts.Token));
+            _experimentRecorderCreationTask = creationTask;
+            var coordinator = await creationTask;
+            if (_shutdownPreparing)
             {
-                _experimentRecorder = null;
-                _experimentRecorderInitializationError = T("message.experimentRecorderInitializationTimedOut");
-                FooterText.Text = string.Format(
-                    CultureInfo.InvariantCulture,
-                    T("message.experimentRecorderUnavailable"),
-                    _experimentRecorderInitializationError);
-                _ = DisposeLateExperimentRecorderAsync(creationTask);
                 return;
             }
 
-            _experimentRecorder = await creationTask;
+            _experimentRecorder = coordinator;
+            _experimentRecorder.UploadStateChanged += ExperimentRecorder_UploadStateChanged;
+            var credentialAvailable = false;
+            try
+            {
+                var credential = await _experimentCredentialStore.ReadTokenAsync(
+                    _settings.ExperimentUpload.CredentialTarget,
+                    CancellationToken.None);
+                credentialAvailable = !string.IsNullOrWhiteSpace(credential);
+            }
+            catch
+            {
+                // Credential failures disable upload but must not disable local evidence recording.
+            }
+            _experimentRecorder.NotifyCredentialAvailability(credentialAvailable);
+            UpdateExperimentUploadStatus(_experimentRecorder.UploadState);
             _experimentRecorderInitializationError = null;
         }
         catch (Exception ex)
         {
             _experimentRecorder = null;
             _experimentRecorderInitializationError = ex.Message;
-            FooterText.Text = string.Format(
-                CultureInfo.InvariantCulture,
-                T("message.experimentRecorderUnavailable"),
-                ex.Message);
+            _experimentUploadHttpClient?.Dispose();
+            _experimentUploadHttpClient = null;
+            if (!_shutdownPreparing)
+            {
+                throw new InvalidOperationException(
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        T("message.experimentRecorderUnavailable"),
+                        ex.Message),
+                    ex);
+            }
         }
     }
 
     private static async Task DisposeLateExperimentRecorderAsync(
-        Task<ExperimentSessionRecorder> creationTask)
+        Task<ExperimentEvidenceCoordinator> creationTask)
     {
         try
         {
@@ -170,7 +331,7 @@ public partial class MainWindow : Window
         }
         catch
         {
-            // Late initialization cleanup must not affect the application.
+            // A cancelled or failed startup task has no coordinator to dispose.
         }
     }
 
@@ -237,9 +398,19 @@ public partial class MainWindow : Window
 
     private async void SelectRoiButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
             await SaveSettingsFromUiAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             var capture = new WindowCapture();
             var windowBounds = capture.GetWindowBounds(_settings.WindowTitleContains);
             if (!capture.BringWindowToForeground(_settings.WindowTitleContains))
@@ -260,6 +431,11 @@ public partial class MainWindow : Window
             _settings.Roi.Width = (int)Math.Max(1, selected.Width);
             _settings.Roi.Height = (int)Math.Max(1, selected.Height);
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             _experimentRecorder?.UpdateSettings(_settings);
             FooterText.Text = $"{T("footer.roiSaved")}: {_settings.Roi}";
             if (_monitoringCts is null)
@@ -271,35 +447,74 @@ public partial class MainWindow : Window
         {
             ShowError(ex);
         }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_monitoringCts is not null || !TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
         try
         {
-            if (_monitoringCts is not null)
+            await SaveSettingsFromUiAsync();
+            if (_shutdownPreparing)
             {
                 return;
             }
 
-            await SaveSettingsFromUiAsync();
             if (!ValidateMonitoringSetup())
             {
                 return;
             }
 
             await RebuildServicesPreservingG2000Async();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
+            await FinalizeExperimentRunAfterStopAsync("monitoring-start-boundary");
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             StartMonitoringLoop(T("footer.monitoringStarted"));
         }
         catch (Exception ex)
         {
             ShowError(ex);
         }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
-    private void StopButton_Click(object sender, RoutedEventArgs e)
+    private async void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        StopMonitoring(T("footer.monitoringStopped"));
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+        try
+        {
+            var monitoringTask = StopMonitoring(T("footer.monitoringStopped"));
+            if (monitoringTask is not null)
+            {
+                await AwaitMonitoringTaskAsync(monitoringTask, CancellationToken.None);
+                await FinalizeExperimentRunAfterStopAsync("monitoring-stopped");
+            }
+        }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
     private async void ResetButton_Click(object sender, RoutedEventArgs e)
@@ -486,6 +701,11 @@ public partial class MainWindow : Window
 
     private async void ExportExperimentButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
             if (_experimentRecorder is null)
@@ -499,7 +719,7 @@ public partial class MainWindow : Window
             var dialog = new SaveFileDialog
             {
                 Filter = T("dialog.experimentZipFilter"),
-                FileName = $"reactor-experiment-{_experimentRecorder.SessionId}.zip"
+                FileName = _experimentRecorder.SuggestedBundleFileName
             };
 
             if (dialog.ShowDialog(this) != true)
@@ -524,6 +744,10 @@ public partial class MainWindow : Window
         {
             ShowError(ex);
         }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
     private async void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
@@ -543,23 +767,52 @@ public partial class MainWindow : Window
 
     private async void SaveSettingsButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
             await SaveSettingsFromUiAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             await RebuildOrRestartMonitoringAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             FooterText.Text = $"{T("footer.settingsSaved")}: {_settingsPath}";
         }
         catch (Exception ex)
         {
             ShowError(ex);
         }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
     private async void AdvancedSettingsMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
             await SaveSettingsFromUiAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             var window = new AdvancedSettingsWindow(_settings.Relay, NormalizeLanguage(_settings.Language))
             {
                 Owner = this
@@ -572,8 +825,18 @@ public partial class MainWindow : Window
 
             _settings.Relay = window.ResultSettings;
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             _experimentRecorder?.UpdateSettings(_settings);
             await RebuildOrRestartMonitoringAsync();
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
             BindSettingsToUi();
             ApplyLanguage();
             FooterText.Text = T("footer.advancedSaved");
@@ -581,6 +844,58 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             ShowError(ex);
+        }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
+    }
+
+    private async void GitLabUploadSettingsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
+        try
+        {
+            var window = new GitLabUploadSettingsWindow(
+                _settings.ExperimentUpload,
+                NormalizeLanguage(_settings.Language),
+                _experimentCredentialStore)
+            {
+                Owner = this
+            };
+            if (window.ShowDialog() != true)
+            {
+                return;
+            }
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
+            _settings.ExperimentUpload = window.ResultSettings;
+            await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
+            _experimentRecorder?.UpdateSettings(_settings);
+            _experimentRecorder?.NotifyCredentialAvailability(window.CredentialAvailable);
+            UpdateExperimentUploadStatus(
+                _experimentRecorder?.UploadState ?? ExperimentUploadState.Disabled);
+            FooterText.Text = T("upload.settings.saved");
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+        finally
+        {
+            EndMonitoringLifecycle();
         }
     }
 
@@ -1116,9 +1431,18 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _experimentRecorder?.RecordEvent("monitoring", "poll-loop", "failed", ex.Message);
-            Dispatcher.Invoke(() =>
+            _ = Dispatcher.BeginInvoke(() =>
             {
-                StopMonitoring(T("footer.monitoringStopped"));
+                if (_monitoringCts is null || _monitoringCts.Token != cancellationToken)
+                {
+                    return;
+                }
+
+                var monitoringTask = StopMonitoring(T("footer.monitoringStopped"));
+                if (monitoringTask is not null)
+                {
+                    _ = CompleteFailedMonitoringRunAsync(monitoringTask);
+                }
                 ShowError(ex);
             });
         }
@@ -1530,18 +1854,127 @@ public partial class MainWindow : Window
         await RefreshGasFlowAsync(force: true);
     }
 
-    private void StopMonitoring(string message)
+    private Task? StopMonitoring(string message)
     {
         var wasMonitoring = _monitoringCts is not null;
+        var monitoringTask = _monitoringTask;
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
         _monitoringCts = null;
+        _monitoringTask = null;
         _monitoringStartedAt = null;
         SetStatus(_stateMachine.IsTripped ? MonitorStatus.Tripped : MonitorStatus.Idle);
         FooterText.Text = message;
         if (wasMonitoring)
         {
             _experimentRecorder?.RecordEvent("monitoring", "stopped", "success");
+        }
+
+        return wasMonitoring ? monitoringTask : null;
+    }
+
+    private async Task CompleteFailedMonitoringRunAsync(Task monitoringTask)
+    {
+        if (_shutdownPreparing)
+        {
+            return;
+        }
+
+        await _monitoringLifecycleGate.WaitAsync();
+        _isRunFinalizing = true;
+        UpdateRunBoundaryButtons();
+        try
+        {
+            if (_shutdownPreparing)
+            {
+                return;
+            }
+
+            await AwaitMonitoringTaskAsync(monitoringTask, CancellationToken.None);
+            await FinalizeExperimentRunAfterStopAsync("monitoring-failed");
+        }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
+    }
+
+    private bool TryBeginMonitoringLifecycle()
+    {
+        if (_shutdownPreparing || !_monitoringLifecycleGate.Wait(0))
+        {
+            return false;
+        }
+
+        _isRunFinalizing = true;
+        UpdateRunBoundaryButtons();
+        return true;
+    }
+
+    private void EndMonitoringLifecycle()
+    {
+        _isRunFinalizing = false;
+        UpdateRunBoundaryButtons();
+        _monitoringLifecycleGate.Release();
+    }
+
+    private void UpdateRunBoundaryButtons()
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        StartButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing && _monitoringCts is null;
+        StopButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing && _monitoringCts is not null;
+        SaveSettingsButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        ExportExperimentButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        ExportExperimentMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        AdvancedSettingsMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        GitLabUploadSettingsMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        SelectRoiButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        SelectRoiMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+    }
+
+    private static async Task AwaitMonitoringTaskAsync(
+        Task? monitoringTask,
+        CancellationToken cancellationToken)
+    {
+        if (monitoringTask is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await monitoringTask.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is the normal monitoring stop path or the shutdown deadline.
+        }
+        catch
+        {
+            // RunMonitoringLoopAsync already records and displays polling failures.
+        }
+    }
+
+    private async Task FinalizeExperimentRunAfterStopAsync(string reason)
+    {
+        var coordinator = _experimentRecorder;
+        if (coordinator is null)
+        {
+            return;
+        }
+
+        var result = await coordinator.FinalizeRunAsync(
+            _settings,
+            reason,
+            startNextRun: true,
+            CancellationToken.None);
+        if (!result.Created && !string.IsNullOrWhiteSpace(result.FailureKind))
+        {
+            FooterText.Text = T("upload.packagingFailed");
         }
     }
 
@@ -1820,6 +2253,7 @@ public partial class MainWindow : Window
         SelectRoiMenuItem.Header = T("button.selectRoi");
         GuideMenuItem.Header = T("button.guide");
         AdvancedSettingsMenuItem.Header = T("menu.advanced");
+        GitLabUploadSettingsMenuItem.Header = T("menu.gitLabUploadSettings");
         HelpMenu.Header = T("menu.help");
         WiringNotesMenuItem.Header = T("menu.wiring");
         AboutMenuItem.Header = T("menu.about");
@@ -1854,6 +2288,9 @@ public partial class MainWindow : Window
         SelectRoiButton.Content = T("button.selectRoi");
         ExportButton.Content = T("button.export");
         ExportExperimentButton.Content = T("button.exportExperiment");
+        UploadStatusLabel.Text = T("upload.statusLabel");
+        UpdateExperimentUploadStatus(
+            _experimentRecorder?.UploadState ?? ExperimentUploadState.Disabled);
         ClearHistoryButton.Content = T("button.clearHistory");
         TestRelayButton.Content = T("button.disconnectAll");
         TestRelayResetButton.Content = T("button.connectAll");
@@ -2037,6 +2474,28 @@ public partial class MainWindow : Window
                 delta > 0 ? T("tooltip.g2000StepIncrease") : T("tooltip.g2000StepDecrease"),
                 DescribeG2000SetpointForTooltip(parts[0]));
         }
+    }
+
+    private void ExperimentRecorder_UploadStateChanged(ExperimentUploadState state)
+    {
+        Dispatcher.BeginInvoke(() => UpdateExperimentUploadStatus(state));
+    }
+
+    private void UpdateExperimentUploadStatus(ExperimentUploadState state)
+    {
+        if (UploadStatusText is null)
+        {
+            return;
+        }
+
+        UploadStatusText.Text = T($"upload.status.{state}");
+        UploadStatusText.Foreground = state switch
+        {
+            ExperimentUploadState.Uploaded => Brushes.ForestGreen,
+            ExperimentUploadState.Failed => Brushes.Firebrick,
+            ExperimentUploadState.MissingCredential => Brushes.DarkOrange,
+            _ => Brushes.SlateGray
+        };
     }
 
     private void SetToolTip(FrameworkElement element, string key)
@@ -2352,7 +2811,15 @@ public partial class MainWindow : Window
 
     private void StartMonitoringLoop(string footerText)
     {
+        if (_shutdownPreparing ||
+            _monitoringCts is not null ||
+            _monitoringTask is { IsCompleted: false })
+        {
+            return;
+        }
+
         _monitoringCts = new CancellationTokenSource();
+        var cancellationToken = _monitoringCts.Token;
         MarkMonitoringSessionStarted();
         SetStatus(MonitorStatus.Monitoring);
         SetCurrentMode(T("mode.monitoring"));
@@ -2364,11 +2831,16 @@ public partial class MainWindow : Window
             $"threshold_c={FormatDoubleForEvidence(_settings.ThresholdC)}; " +
             $"recovery_c={FormatDoubleForEvidence(_settings.RecoveryThresholdC)}; " +
             $"poll_interval_ms={_settings.PollIntervalMs}");
-        _ = Task.Run(() => RunMonitoringLoopAsync(_monitoringCts.Token));
+        _monitoringTask = Task.Run(() => RunMonitoringLoopAsync(cancellationToken));
     }
 
     private async Task RebuildOrRestartMonitoringAsync()
     {
+        if (_shutdownPreparing)
+        {
+            return;
+        }
+
         if (_monitoringCts is null)
         {
             BuildServices();
@@ -2381,11 +2853,27 @@ public partial class MainWindow : Window
             return;
         }
 
-        _monitoringCts.Cancel();
-        _monitoringCts.Dispose();
-        _monitoringCts = new CancellationTokenSource();
+        var previousMonitoringCts = _monitoringCts;
+        var previousMonitoringTask = _monitoringTask;
+        _monitoringCts = null;
+        _monitoringTask = null;
+        previousMonitoringCts.Cancel();
+        previousMonitoringCts.Dispose();
+        await AwaitMonitoringTaskAsync(previousMonitoringTask, CancellationToken.None);
+        if (_shutdownPreparing || _monitoringCts is not null)
+        {
+            return;
+        }
+
         BuildServices();
         await InitializeG2000ControllerAsync();
+        if (_shutdownPreparing || _monitoringCts is not null)
+        {
+            return;
+        }
+
+        _monitoringCts = new CancellationTokenSource();
+        var cancellationToken = _monitoringCts.Token;
         MarkMonitoringSessionStarted();
         SetStatus(MonitorStatus.Monitoring);
         SetCurrentMode(T("mode.monitoring"));
@@ -2397,7 +2885,7 @@ public partial class MainWindow : Window
             $"threshold_c={FormatDoubleForEvidence(_settings.ThresholdC)}; " +
             $"recovery_c={FormatDoubleForEvidence(_settings.RecoveryThresholdC)}; " +
             $"poll_interval_ms={_settings.PollIntervalMs}");
-        _ = Task.Run(() => RunMonitoringLoopAsync(_monitoringCts.Token));
+        _monitoringTask = Task.Run(() => RunMonitoringLoopAsync(cancellationToken));
         await RefreshGasFlowAsync(force: true);
     }
 

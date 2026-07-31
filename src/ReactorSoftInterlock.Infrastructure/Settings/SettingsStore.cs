@@ -19,6 +19,7 @@ public sealed class SettingsStore
             var defaults = new AppSettings();
             defaults.Relay.Normalize();
             defaults.Amc2100.Normalize();
+            defaults.ExperimentUpload.Normalize();
             await SaveAsync(defaults, cancellationToken).ConfigureAwait(false);
             return defaults;
         }
@@ -28,6 +29,8 @@ public sealed class SettingsStore
             ?? new AppSettings();
         settings.Relay.Normalize();
         settings.Amc2100.Normalize();
+        settings.ExperimentUpload ??= new ExperimentUploadSettings();
+        settings.ExperimentUpload.Normalize();
         return settings;
     }
 
@@ -35,6 +38,8 @@ public sealed class SettingsStore
     {
         settings.Relay.Normalize();
         settings.Amc2100.Normalize();
+        settings.ExperimentUpload ??= new ExperimentUploadSettings();
+        settings.ExperimentUpload.Normalize();
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrWhiteSpace(directory))
         {

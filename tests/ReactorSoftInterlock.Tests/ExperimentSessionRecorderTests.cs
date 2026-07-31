@@ -34,17 +34,19 @@ public sealed class ExperimentSessionRecorderTests
         Assert.True(File.Exists(Path.Combine(recorder.SessionDirectory, "events.csv")));
         Assert.True(File.Exists(Path.Combine(recorder.SessionDirectory, "g2000-telemetry.csv")));
         Assert.True(File.Exists(Path.Combine(recorder.SessionDirectory, "gas-flow.csv")));
-        Assert.True(File.Exists(Path.Combine(recorder.SessionDirectory, "manual-fields.md")));
+        Assert.True(File.Exists(Path.Combine(recorder.SessionDirectory, "lab-profile.json")));
+        Assert.True(File.Exists(Path.Combine(recorder.SessionDirectory, "experiment-context.md")));
+        Assert.False(File.Exists(Path.Combine(recorder.SessionDirectory, "manual-fields.md")));
 
         var settingsJson = await File.ReadAllTextAsync(
             Path.Combine(recorder.SessionDirectory, "settings-start.json"));
         Assert.Contains("\"ThresholdC\": 60", settingsJson);
         Assert.Contains("Hikmicro Analyzer", settingsJson);
 
-        var manualFields = await File.ReadAllTextAsync(
-            Path.Combine(recorder.SessionDirectory, "manual-fields.md"));
-        Assert.Contains("camera emissivity", manualFields, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("reactor material", manualFields, StringComparison.OrdinalIgnoreCase);
+        var experimentContext = await File.ReadAllTextAsync(
+            Path.Combine(recorder.SessionDirectory, "experiment-context.md"));
+        Assert.Contains("HIKMICRO E20Plus", experimentContext, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not_recorded", experimentContext, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -181,7 +183,9 @@ public sealed class ExperimentSessionRecorderTests
         Assert.Contains("g2000-telemetry.csv", names);
         Assert.Contains("gas-flow.csv", names);
         Assert.Contains("report-summary.json", names);
-        Assert.Contains("manual-fields.md", names);
+        Assert.Contains("lab-profile.json", names);
+        Assert.Contains("experiment-context.md", names);
+        Assert.DoesNotContain("manual-fields.md", names);
 
         var eventEntry = archive.GetEntry("events.csv");
         Assert.NotNull(eventEntry);
@@ -262,7 +266,7 @@ public sealed class ExperimentSessionRecorderTests
             new AppSettings(),
             "2026.07.30-test",
             CancellationToken.None);
-        File.Delete(Path.Combine(recorder.SessionDirectory, "manual-fields.md"));
+        File.Delete(Path.Combine(recorder.SessionDirectory, "lab-profile.json"));
 
         await Assert.ThrowsAnyAsync<Exception>(
             () => recorder.ExportAsync(exportPath, CancellationToken.None));
