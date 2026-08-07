@@ -69,6 +69,22 @@ public sealed class InterlockStateMachineTests
     }
 
     [Fact]
+    public void ApplySettingsInPlacePreservesConfirmedLatchedTrip()
+    {
+        var machine = new InterlockStateMachine(new InterlockSettings(90.0));
+        Assert.True(machine.Evaluate(95.0).ShouldSendStop);
+        machine.ConfirmStopSent();
+
+        machine.ApplySettings(new InterlockSettings(190.0));
+        var decision = machine.Evaluate(100.0);
+
+        Assert.True(machine.IsTripped);
+        Assert.False(decision.ShouldSendStop);
+        Assert.True(machine.CanReset(100.0));
+        Assert.Contains("90.0", decision.AlarmReason);
+    }
+
+    [Fact]
     public void ReconfigurePreservesUnconfirmedStopRequirement()
     {
         var machine = new InterlockStateMachine(new InterlockSettings(90.0));
