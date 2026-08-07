@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <InformationalVersion>2026.08.07-amc2100-live-setpoint-control</InformationalVersion>
+    <InformationalVersion>2026.08.07-interlock-recovery-amc-save-order</InformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ReactorSoftInterlock.Application\ReactorSoftInterlock.Application.csproj" />

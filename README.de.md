@@ -63,6 +63,7 @@ Die aktuelle AMC2100-Logik in der Software ist:
 - Die AMC2100-Gasflusssteuerung bleibt von der Temperatur-Verriegelung unabhaengig.
 - Vor einem Hardware-Durchflussbefehl muss AMC2100 aktiviert sein; bei deaktivierter Steuerung wird der Befehl eindeutig blockiert.
 - Wenn AMC2100 aktiviert ist, schreibt `Einstellungen speichern` den angezeigten Ziel-Durchfluss in das Geraet.
+- Beim Speichern wird die vollstaendige neue Monitoring-Konfiguration geprueft, bevor ein aktives Monitoring angehalten wird. Danach werden Temperatur-/Recovery-Policy angewendet, AMC2100 unabhaengig geschrieben und zurueckgelesen und anschliessend die G2000-Verbindung bestaetigt. Fehler eines Teilsystems werden getrennt gemeldet und ueberspringen die anderen Teilsysteme nicht.
 - Die Tasten `-` / `+` aendern den Sollwert um 10 mL/min und schreiben ihn sofort, ohne zusaetzliches Speichern.
 - `Gasfluss stoppen` schreibt `0`; `Gas-Sollwert anwenden` schreibt den konfigurierten Zielwert.
 - Periodisches Lesen des Ist-Durchflusses und manuelle Schreibbefehle verwenden einen serialisierten Befehlspfad und konkurrieren nicht um denselben COM-Port.
@@ -371,6 +372,7 @@ Dry Run:
 - Temperaturtext nicht verdecken.
 - Bei unplausibler Temperatur `Raw OCR text` prüfen.
 - Die automatische HIKMICRO-Bildkalibrierung kann im Overlay kurz exakt `0 C` anzeigen. Exakt null wird als `NO READING` behandelt, setzt die Stabilzeit fuer die automatische Wiederfreigabe zurueck und kann einen ausgeloesten Interlock nicht selbst freigeben.
+- Jeder Tesseract-OCR-Unterprozess hat ein Timeout von 5 s; ein haengender Prozess wird beendet und als `NO READING` protokolliert, damit der naechste Polling-Zyklus weiterlaeuft.
 - Bei wiederholtem `NO READING` zuerst ROI/OCR korrigieren, bevor die Software weiter als Schutz verwendet wird.
 
 ## Nach einem Trip
@@ -497,6 +499,7 @@ Wichtige Felder:
 - `AutoResetEnabled`: Standard `true`.
 - `RecoveryThresholdC`: Standard `85.0`.
 - `RecoveryStableSeconds`: Standard `30`.
+- Beim Speichern neuer Temperatur-/Recovery-Einstellungen waehrend eines Trips bleibt die logische Trip-Verriegelung erhalten und es wird kein Reset gesendet. Muss der Ausgangscontroller ersetzt werden, wird der Stop-Befehl vor dem Neustart des Monitorings erneut gesendet. Die neue Stabilzeit beginnt erst bei einem gueltigen Temperaturwert unterhalb der neuen Recovery-Schwelle.
 
 ## Entwicklertest
 

@@ -65,9 +65,25 @@ public sealed class TesseractCliTemperatureReader : ITemperatureReader
         };
 
         process.Start();
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1000, _settings.Ocr.ProcessTimeoutMs)));
+        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+        string stderr;
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            stderr = await stderrTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            TryKill(process);
+            throw new TimeoutException($"Tesseract OCR exceeded the {_settings.Ocr.ProcessTimeoutMs} ms process timeout.");
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
         var outputPath = outputBase + ".txt";
 
         if (process.ExitCode != 0)
@@ -82,6 +98,21 @@ public sealed class TesseractCliTemperatureReader : ITemperatureReader
         finally
         {
             TryDelete(outputPath);
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Cancellation and timeout must still return control even if process cleanup fails.
         }
     }
 

@@ -27,4 +27,43 @@ public sealed class AppSettings
     public ExperimentUploadSettings ExperimentUpload { get; set; } = new();
 
     public string DataDirectory { get; set; } = "data";
+
+    public AppSettings Clone()
+    {
+        return new AppSettings
+        {
+            Language = Language,
+            ThresholdC = ThresholdC,
+            AutoResetEnabled = AutoResetEnabled,
+            RecoveryThresholdC = RecoveryThresholdC,
+            RecoveryStableSeconds = RecoveryStableSeconds,
+            PollIntervalMs = PollIntervalMs,
+            WindowTitleContains = WindowTitleContains,
+            Roi = new RoiSettings
+            {
+                X = Roi.X,
+                Y = Roi.Y,
+                Width = Roi.Width,
+                Height = Roi.Height
+            },
+            Ocr = new OcrSettings
+            {
+                TesseractExePath = Ocr.TesseractExePath,
+                Language = Ocr.Language,
+                ProcessTimeoutMs = Ocr.ProcessTimeoutMs
+            },
+            Relay = Relay.Clone(),
+            Amc2100 = Amc2100.Clone(),
+            ExperimentUpload = new ExperimentUploadSettings
+            {
+                AutoUploadEnabled = ExperimentUpload.AutoUploadEnabled,
+                BaseUrl = ExperimentUpload.BaseUrl,
+                ProjectId = ExperimentUpload.ProjectId,
+                PackageName = ExperimentUpload.PackageName,
+                CredentialTarget = ExperimentUpload.CredentialTarget,
+                HttpTimeoutSeconds = ExperimentUpload.HttpTimeoutSeconds
+            },
+            DataDirectory = DataDirectory
+        };
+    }
 }

@@ -63,6 +63,7 @@ The current software-side AMC2100 logic is:
 - AMC2100 gas control remains independent from the temperature interlock.
 - Enable AMC2100 gas control before sending a hardware flow command; disabled commands are blocked rather than silently treated as successful.
 - `Save Settings` applies the displayed target flow when AMC2100 is enabled.
+- Saving settings validates the complete candidate monitoring setup before pausing an active monitor, then applies the temperature/recovery policy and independently writes and reads back AMC2100 before confirming the G2000 connection. A failure in one subsystem is reported without skipping the others.
 - The target-flow `-` / `+` buttons change the setpoint by 10 mL/min and write it immediately, without a separate save action.
 - `Stop Gas Flow` writes `0`; `Apply Gas Setpoint` writes the configured target.
 - Periodic actual-flow reads and manual writes share one serialized command path so they cannot contend for the same COM port.
@@ -375,6 +376,7 @@ During experiment:
 - Do not cover the temperature text.
 - Watch `Raw OCR text` if the displayed temperature looks wrong.
 - HIKMICRO automatic image calibration can briefly expose exactly `0 C` in the overlay. Exact zero is treated as `NO READING`, resets the automatic-recovery stability timer, and cannot by itself restore a tripped interlock.
+- Each Tesseract OCR child process has a 5 s timeout; a hung process is terminated and recorded as `NO READING` so the next polling cycle can continue.
 - If `NO READING` appears repeatedly, pause and fix ROI/OCR before relying on the software.
 
 After trip:
@@ -588,6 +590,7 @@ Important fields:
 - `AutoResetEnabled`: default `true`.
 - `RecoveryThresholdC`: default `85.0`.
 - `RecoveryStableSeconds`: default `30`.
+- Saving new temperature/recovery settings while tripped preserves the logical trip latch and never sends a reset. If the output controller must be replaced, the stop command is reasserted before monitoring resumes. The new stable-time countdown starts only after a valid temperature is below the new recovery threshold.
 
 ## Developer Test Command
 

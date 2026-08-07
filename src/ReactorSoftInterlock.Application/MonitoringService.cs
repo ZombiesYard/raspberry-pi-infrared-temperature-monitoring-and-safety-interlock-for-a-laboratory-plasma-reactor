@@ -36,14 +36,32 @@ public sealed class MonitoringService
         var reading = await _temperatureReader.ReadAsync(cancellationToken).ConfigureAwait(false);
         var decision = _stateMachine.Evaluate(reading.TemperatureC);
         var relayAction = decision.RelayAction;
+        var status = decision.Status;
+        var alarmReason = decision.AlarmReason;
 
         if (decision.ShouldSendStop)
         {
-            relayAction = await _relayController.StopAsync(cancellationToken).ConfigureAwait(false);
-        }
+            try
+            {
+                relayAction = await _relayController.StopAsync(cancellationToken).ConfigureAwait(false);
+                if (relayAction != RelayAction.StopSent)
+                {
+                    throw new InvalidOperationException($"Interlock stop returned unexpected action {relayAction}.");
+                }
 
-        var status = decision.Status;
-        var alarmReason = decision.AlarmReason;
+                _stateMachine.ConfirmStopSent();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                relayAction = RelayAction.Failed;
+                status = MonitorStatus.RelayTestFailed;
+                alarmReason = $"Interlock stop failed and will be retried: {ex.Message}";
+            }
+        }
 
         if (_stateMachine.IsTripped && !decision.ShouldSendStop)
         {

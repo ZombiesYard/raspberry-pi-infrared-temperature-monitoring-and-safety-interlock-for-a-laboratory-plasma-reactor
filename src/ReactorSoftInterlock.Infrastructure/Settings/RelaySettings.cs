@@ -61,6 +61,32 @@ public sealed class RelaySettings
         return DryRun ? RelayControllerMode.DryRun : RelayControllerMode.Serial;
     }
 
+    public RelaySettings Clone()
+    {
+        return new RelaySettings
+        {
+            Mode = Mode,
+            DryRun = DryRun,
+            PortName = PortName,
+            BaudRate = BaudRate,
+            StopCommandHex = StopCommandHex,
+            ResetCommandHex = ResetCommandHex,
+            OpenOnAlarm = OpenOnAlarm,
+            G2000Can = G2000Can.Clone(),
+            Channels = Channels
+                .Select(static channel => new RelayChannelSettings
+                {
+                    ChannelNumber = channel.ChannelNumber,
+                    DisplayName = channel.DisplayName,
+                    InterlockMapping = channel.InterlockMapping,
+                    Enabled = channel.Enabled,
+                    OpenCommand = channel.OpenCommand,
+                    CloseCommand = channel.CloseCommand
+                })
+                .ToList()
+        };
+    }
+
     private static List<RelayChannelSettings> CreateDefaultChannels()
     {
         return

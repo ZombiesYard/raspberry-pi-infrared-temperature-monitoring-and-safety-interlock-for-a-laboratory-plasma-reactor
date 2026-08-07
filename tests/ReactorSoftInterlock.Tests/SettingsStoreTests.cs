@@ -26,6 +26,36 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public void AppSettingsCloneIsDeepAndIndependent()
+    {
+        var original = new AppSettings();
+        original.Roi.Width = 100;
+        original.Ocr.ProcessTimeoutMs = 5000;
+        original.Relay.PortName = "COM3";
+        original.Relay.Channels[0].OpenCommand = "AT+CH1=0";
+        original.Relay.G2000Can.WritableSetpoints.VoltageV = 43;
+        original.Amc2100.PortName = "COM4";
+        original.ExperimentUpload.PackageName = "reactor-experiment-evidence";
+
+        var clone = original.Clone();
+        clone.Roi.Width = 200;
+        clone.Ocr.ProcessTimeoutMs = 1000;
+        clone.Relay.PortName = "COM7";
+        clone.Relay.Channels[0].OpenCommand = "changed";
+        clone.Relay.G2000Can.WritableSetpoints.VoltageV = 63;
+        clone.Amc2100.PortName = "COM8";
+        clone.ExperimentUpload.PackageName = "changed";
+
+        Assert.Equal(100, original.Roi.Width);
+        Assert.Equal(5000, original.Ocr.ProcessTimeoutMs);
+        Assert.Equal("COM3", original.Relay.PortName);
+        Assert.Equal("AT+CH1=0", original.Relay.Channels[0].OpenCommand);
+        Assert.Equal(43, original.Relay.G2000Can.WritableSetpoints.VoltageV);
+        Assert.Equal("COM4", original.Amc2100.PortName);
+        Assert.Equal("reactor-experiment-evidence", original.ExperimentUpload.PackageName);
+    }
+
+    [Fact]
     public async Task ConcurrentSavesDoNotCorruptSettingsFile()
     {
         var tempFile = Path.GetTempFileName();
