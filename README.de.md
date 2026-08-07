@@ -60,14 +60,17 @@ Dieser Branch wird jetzt auch fuer den `AMC2100` Gas-Massendurchflussregler erwe
 
 Die aktuelle AMC2100-Logik in der Software ist:
 
-- Beim Trip wird der AMC2100-Sollwert auf `0` gesetzt
-- Danach werden die G2000-Interlock-Kanaele geoeffnet
-- Bei Reset / Auto Reset werden zuerst die Interlock-Kanaele wieder geschlossen und danach der AMC2100-Sollwert auf den zuvor zwischengespeicherten oder einen konfigurierten Fallback-Wert gesetzt
-- Im Hauptfenster wird zusaetzlich ein Live-Wert `Gasfluss` aus den AMC2100-Istwert-Registern ueber RS485 angezeigt
+- Die AMC2100-Gasflusssteuerung bleibt von der Temperatur-Verriegelung unabhaengig.
+- Vor einem Hardware-Durchflussbefehl muss AMC2100 aktiviert sein; bei deaktivierter Steuerung wird der Befehl eindeutig blockiert.
+- Wenn AMC2100 aktiviert ist, schreibt `Einstellungen speichern` den angezeigten Ziel-Durchfluss in das Geraet.
+- Die Tasten `-` / `+` aendern den Sollwert um 10 mL/min und schreiben ihn sofort, ohne zusaetzliches Speichern.
+- `Gasfluss stoppen` schreibt `0`; `Gas-Sollwert anwenden` schreibt den konfigurierten Zielwert.
+- Periodisches Lesen des Ist-Durchflusses und manuelle Schreibbefehle verwenden einen serialisierten Befehlspfad und konkurrieren nicht um denselben COM-Port.
+- Im Hauptfenster wird der Live-Wert `Gasfluss` aus den AMC2100-Istwert-Registern ueber RS485 angezeigt.
 
-Damit kann die Software den AMC2100-Gasfluss softwareseitig stoppen und wieder freigeben. Das bedeutet aber nicht, dass im Handbuch bereits ein eigener Hard-Reset-Registerzugriff dokumentiert ist. In diesem Prototyp bedeutet "Software-Reset" fuer den AMC2100: Sollwert auf `0` schreiben, spaeter Sollwert wiederherstellen.
+Dies ist kein separater Hard-Reset-Registerzugriff. Die UI meldet Erfolg erst, wenn die Modbus-Schreibantwort die Register `2-3` bestaetigt und ein sofortiges Ruecklesen dem angeforderten Sollwert entspricht. Das verifiziert das Sollwertregister, nicht den physischen Gasfluss; dafuer bleiben die Live-Anzeige `Gasfluss` und die Beobachtung vor Ort erforderlich.
 
-Beim Banktest kann das lokale AMC2100-Display weiterhin `0` zeigen oder den Sollwert nicht sofort sichtbar aktualisieren, solange nicht lokal am Geraet navigiert wird. Fuer die RS485-Inbetriebnahme in diesem Branch ist deshalb die Live-Anzeige `Gasfluss` im Software-Dashboard die wichtigere Referenz.
+Beim Banktest kann das lokale AMC2100-Display weiterhin `0` zeigen oder den Sollwert nicht sofort aktualisieren. Schreib-Rueckmeldung und Live-`Gasfluss` gemeinsam pruefen; aus einem erfolgreichen Befehl allein darf kein physischer Durchfluss abgeleitet werden.
 
 Fuer einen praktischen softwaregesteuerten Validierungsablauf direkt auf der Engineering-Seite diese Checkliste verwenden:
 
@@ -367,6 +370,7 @@ Dry Run:
 - HikmicroAnalyzer nicht minimieren.
 - Temperaturtext nicht verdecken.
 - Bei unplausibler Temperatur `Raw OCR text` prüfen.
+- Die automatische HIKMICRO-Bildkalibrierung kann im Overlay kurz exakt `0 C` anzeigen. Exakt null wird als `NO READING` behandelt, setzt die Stabilzeit fuer die automatische Wiederfreigabe zurueck und kann einen ausgeloesten Interlock nicht selbst freigeben.
 - Bei wiederholtem `NO READING` zuerst ROI/OCR korrigieren, bevor die Software weiter als Schutz verwendet wird.
 
 ## Nach einem Trip

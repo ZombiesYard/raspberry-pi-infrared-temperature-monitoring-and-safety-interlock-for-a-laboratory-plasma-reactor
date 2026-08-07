@@ -383,7 +383,16 @@
                     </Grid>
 
                     <TextBlock x:Name="AmcFallbackLabel" Style="{StaticResource LabelStyle}" Text="Restore setpoint mL/min" />
-                    <TextBox x:Name="AmcFallbackBox" Style="{StaticResource InputStyle}" />
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <TextBox x:Name="AmcFallbackBox" Grid.Column="0" Style="{StaticResource InputStyle}" />
+                      <Button x:Name="AmcSetpointDecreaseButton" Grid.Column="1" Style="{StaticResource StepButtonStyle}" Content="-" Tag="-10" Click="AmcSetpointStepButton_Click" />
+                      <Button x:Name="AmcSetpointIncreaseButton" Grid.Column="2" Style="{StaticResource StepButtonStyle}" Content="+" Tag="10" Click="AmcSetpointStepButton_Click" />
+                    </Grid>
                     <CheckBox x:Name="AmcForceDigitalModeBox" Content="Force AMC2100 digital mode before writing setpoint" Margin="0,0,0,14" />
 
                     <Button x:Name="SaveSettingsButton" Style="{StaticResource PrimaryButtonStyle}" Content="Save Settings" Click="SaveSettingsButton_Click" Margin="0" />

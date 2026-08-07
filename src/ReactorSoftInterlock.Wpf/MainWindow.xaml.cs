@@ -57,9 +57,13 @@ public partial class MainWindow : Window
     private string? _lastG2000ConnectionError;
     private string? _relayRuntimeKey;
     private readonly SemaphoreSlim _branchInterlockGate = new(1, 1);
+    private readonly SemaphoreSlim _gasFlowGate = new(1, 1);
+    private readonly SemaphoreSlim _gasFlowActionGate = new(1, 1);
     private readonly SemaphoreSlim _monitoringLifecycleGate = new(1, 1);
+    private readonly CancellationTokenSource _gasFlowLifetimeCts = new();
     private bool _isBindingSettings;
-    private bool _isRefreshingGasFlow;
+    private Task<double?>? _gasFlowReadTask;
+    private bool _isGasFlowActionBusy;
     private double _monitorLeftScrollOffset;
     private bool _isRestoringMonitorLeftScroll;
     private bool _shutdownPreparing;
@@ -144,6 +148,7 @@ public partial class MainWindow : Window
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
         _gasFlowTimer.Stop();
+        _gasFlowLifetimeCts.Cancel();
         _monitoringCts?.Cancel();
         _monitoringCts?.Dispose();
         if (_g2000Controller is not null)
@@ -157,6 +162,7 @@ public partial class MainWindow : Window
         _experimentRecorder = null;
         _experimentUploadHttpClient?.Dispose();
         _experimentUploadHttpClient = null;
+        _gasFlowLifetimeCts.Dispose();
     }
 
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
@@ -165,6 +171,8 @@ public partial class MainWindow : Window
         {
             return;
         }
+
+        _gasFlowLifetimeCts.Cancel();
         if (!_initializationComplete)
         {
             e.Cancel = true;
@@ -229,11 +237,17 @@ public partial class MainWindow : Window
         coordinator.RecordEvent("application", "session-stopped", "success");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var lifecycleAcquired = false;
+        var gasActionAcquired = false;
+        var gasIoAcquired = false;
         try
         {
             await AwaitMonitoringTaskAsync(monitoringTask, timeout.Token);
             await _monitoringLifecycleGate.WaitAsync(timeout.Token);
             lifecycleAcquired = true;
+            await _gasFlowActionGate.WaitAsync(timeout.Token);
+            gasActionAcquired = true;
+            await _gasFlowGate.WaitAsync(timeout.Token);
+            gasIoAcquired = true;
             await coordinator.FinalizeRunAsync(
                     _settings,
                     "application-exit",
@@ -250,6 +264,14 @@ public partial class MainWindow : Window
         if (lifecycleAcquired)
         {
             _monitoringLifecycleGate.Release();
+        }
+        if (gasIoAcquired)
+        {
+            _gasFlowGate.Release();
+        }
+        if (gasActionAcquired)
+        {
+            _gasFlowActionGate.Release();
         }
         _experimentRecorder = null;
         _shutdownReady = true;
@@ -772,6 +794,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (!TryBeginGasFlowAction())
+        {
+            EndMonitoringLifecycle();
+            return;
+        }
+
         try
         {
             await SaveSettingsFromUiAsync();
@@ -786,7 +814,28 @@ public partial class MainWindow : Window
                 return;
             }
 
-            FooterText.Text = $"{T("footer.settingsSaved")}: {_settingsPath}";
+            if (_settings.Amc2100.Enabled)
+            {
+                if (!ValidateAmc2100Setup(requireEnabled: true))
+                {
+                    _experimentRecorder?.RecordEvent(
+                        "amc2100",
+                        "set-flow-target",
+                        "blocked",
+                        "AMC2100 validation did not pass while saving settings.");
+                    return;
+                }
+
+                await ApplyConfiguredGasFlowAsync("set-flow-target");
+            }
+
+            FooterText.Text = _settings.Amc2100.Enabled
+                ? string.Format(CultureInfo.InvariantCulture, T("footer.settingsSavedGasApplied"), _settings.Amc2100.FallbackRestoreSetpointMlMin)
+                : $"{T("footer.settingsSaved")}: {_settingsPath}";
+        }
+        catch (OperationCanceledException) when (_gasFlowLifetimeCts.IsCancellationRequested)
+        {
+            // Normal application shutdown.
         }
         catch (Exception ex)
         {
@@ -794,6 +843,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            EndGasFlowAction();
             EndMonitoringLifecycle();
         }
     }
@@ -944,10 +994,15 @@ public partial class MainWindow : Window
 
     private async void StopGasButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginGasFlowAction())
+        {
+            return;
+        }
+
         try
         {
-            await SaveSettingsFromUiAsync();
-            if (!ValidateAmc2100Setup())
+            await SaveAmc2100SettingsFromUiAsync();
+            if (!ValidateAmc2100Setup(requireEnabled: true))
             {
                 _experimentRecorder?.RecordEvent(
                     "amc2100",
@@ -957,20 +1012,29 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await CreateGasFlowController().StopFlowAsync(CancellationToken.None);
-            await RefreshGasFlowAsync(force: true);
+            await ExecuteGasFlowIoAsync(
+                static (controller, cancellationToken) => controller.StopFlowAsync(cancellationToken));
+            var actualFlow = await RefreshGasFlowAsync(force: true);
             SetCurrentMode(T("mode.engineering"));
             FooterText.Text = T("footer.gasStopped");
             _experimentRecorder?.RecordEvent(
                 "amc2100",
                 "set-flow-zero",
                 "command-completed",
-                "target_ml_min=0; hardware_feedback=false");
+                $"target_ml_min=0; setpoint_readback=true; actual_flow_ml_min={FormatOptionalDoubleForEvidence(actualFlow)}");
+        }
+        catch (OperationCanceledException) when (_gasFlowLifetimeCts.IsCancellationRequested)
+        {
+            // Normal application shutdown.
         }
         catch (Exception ex)
         {
             _experimentRecorder?.RecordEvent("amc2100", "set-flow-zero", "failed", ex.Message);
             ShowError(ex);
+        }
+        finally
+        {
+            EndGasFlowAction();
         }
     }
 
@@ -1148,12 +1212,81 @@ public partial class MainWindow : Window
         });
     }
 
-    private async void RestoreGasButton_Click(object sender, RoutedEventArgs e)
+    private async void AmcSetpointStepButton_Click(object sender, RoutedEventArgs e)
     {
+        if (sender is not FrameworkElement { Tag: string tag } ||
+            !double.TryParse(tag, NumberStyles.Float, CultureInfo.InvariantCulture, out var delta))
+        {
+            return;
+        }
+
+        if (!TryBeginGasFlowAction())
+        {
+            return;
+        }
+
         try
         {
-            await SaveSettingsFromUiAsync();
-            if (!ValidateAmc2100Setup())
+            if (AmcEnabledBox.IsChecked != true)
+            {
+                _experimentRecorder?.RecordEvent(
+                    "amc2100",
+                    "adjust-flow-setpoint",
+                    "blocked",
+                    "AMC2100 is disabled.");
+                ShowSetupWarning(T("message.amcDisabled"));
+                return;
+            }
+
+            if (!double.TryParse(AmcFallbackBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var current) ||
+                !double.IsFinite(current) ||
+                current < 0)
+            {
+                throw new InvalidOperationException(T("message.amcSetpointInvalid"));
+            }
+            var adjusted = Math.Max(0, current + delta);
+            AmcFallbackBox.Text = adjusted.ToString("0.0", CultureInfo.InvariantCulture);
+            await SaveAmc2100SettingsFromUiAsync();
+            if (!ValidateAmc2100Setup(requireEnabled: true))
+            {
+                _experimentRecorder?.RecordEvent(
+                    "amc2100",
+                    "adjust-flow-setpoint",
+                    "blocked",
+                    $"delta_ml_min={FormatDoubleForEvidence(delta)}; AMC2100 validation did not pass.");
+                return;
+            }
+
+            await ApplyConfiguredGasFlowAsync(
+                "adjust-flow-setpoint",
+                $"delta_ml_min={FormatDoubleForEvidence(delta)}");
+        }
+        catch (OperationCanceledException) when (_gasFlowLifetimeCts.IsCancellationRequested)
+        {
+            // Normal application shutdown.
+        }
+        catch (Exception ex)
+        {
+            _experimentRecorder?.RecordEvent("amc2100", "adjust-flow-setpoint", "failed", ex.Message);
+            ShowError(ex);
+        }
+        finally
+        {
+            EndGasFlowAction();
+        }
+    }
+
+    private async void RestoreGasButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBeginGasFlowAction())
+        {
+            return;
+        }
+
+        try
+        {
+            await SaveAmc2100SettingsFromUiAsync();
+            if (!ValidateAmc2100Setup(requireEnabled: true))
             {
                 _experimentRecorder?.RecordEvent(
                     "amc2100",
@@ -1163,24 +1296,98 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await CreateGasFlowController().SetTargetFlowAsync(_settings.Amc2100.FallbackRestoreSetpointMlMin, CancellationToken.None);
-            await RefreshGasFlowAsync(force: true);
+            await ApplyConfiguredGasFlowAsync("set-flow-target");
             SetCurrentMode(T("mode.engineering"));
-            FooterText.Text = string.Format(
-                CultureInfo.InvariantCulture,
-                T("footer.gasSetpointApplied"),
-                _settings.Amc2100.FallbackRestoreSetpointMlMin.ToString("0.0", CultureInfo.InvariantCulture));
-            _experimentRecorder?.RecordEvent(
-                "amc2100",
-                "set-flow-target",
-                "command-completed",
-                $"target_ml_min={FormatDoubleForEvidence(_settings.Amc2100.FallbackRestoreSetpointMlMin)}; hardware_feedback=false");
+        }
+        catch (OperationCanceledException) when (_gasFlowLifetimeCts.IsCancellationRequested)
+        {
+            // Normal application shutdown.
         }
         catch (Exception ex)
         {
             _experimentRecorder?.RecordEvent("amc2100", "set-flow-target", "failed", ex.Message);
             ShowError(ex);
         }
+        finally
+        {
+            EndGasFlowAction();
+        }
+    }
+
+    private async Task ApplyConfiguredGasFlowAsync(string actionName, string additionalDetails = "")
+    {
+        var target = _settings.Amc2100.FallbackRestoreSetpointMlMin;
+        await ExecuteGasFlowIoAsync(
+            (controller, cancellationToken) => controller.SetTargetFlowAsync(target, cancellationToken));
+        var actualFlow = await RefreshGasFlowAsync(force: true);
+        FooterText.Text = string.Format(
+            CultureInfo.InvariantCulture,
+            T("footer.gasSetpointApplied"),
+            target.ToString("0.0", CultureInfo.InvariantCulture));
+        var details = $"target_ml_min={FormatDoubleForEvidence(target)}; setpoint_readback=true; " +
+                      $"actual_flow_ml_min={FormatOptionalDoubleForEvidence(actualFlow)}";
+        if (!string.IsNullOrWhiteSpace(additionalDetails))
+        {
+            details = $"{additionalDetails}; {details}";
+        }
+
+        _experimentRecorder?.RecordEvent(
+            "amc2100",
+            actionName,
+            "command-completed",
+            details);
+    }
+
+    private Task ExecuteGasFlowIoAsync(Func<IGasFlowController, CancellationToken, Task> action)
+    {
+        var controller = CreateGasFlowController();
+        var cancellationToken = _gasFlowLifetimeCts.Token;
+        return Task.Run(() => action(controller, cancellationToken), cancellationToken);
+    }
+
+    private Task<T> ExecuteGasFlowIoAsync<T>(Func<IGasFlowController, CancellationToken, Task<T>> action)
+    {
+        var controller = CreateGasFlowController();
+        var cancellationToken = _gasFlowLifetimeCts.Token;
+        return Task.Run(() => action(controller, cancellationToken), cancellationToken);
+    }
+
+    private bool TryBeginGasFlowAction()
+    {
+        if (_shutdownPreparing || !_gasFlowActionGate.Wait(0))
+        {
+            return false;
+        }
+
+        _isGasFlowActionBusy = true;
+        SetGasFlowControlsEnabled(false);
+        UpdateRunBoundaryButtons();
+        return true;
+    }
+
+    private void EndGasFlowAction()
+    {
+        _gasFlowActionGate.Release();
+        _isGasFlowActionBusy = false;
+        if (!_shutdownPreparing)
+        {
+            SetGasFlowControlsEnabled(true);
+            UpdateRunBoundaryButtons();
+        }
+    }
+
+    private void SetGasFlowControlsEnabled(bool enabled)
+    {
+        AmcEnabledBox.IsEnabled = enabled;
+        AmcPortBox.IsEnabled = enabled;
+        AmcBaudBox.IsEnabled = enabled;
+        AmcSlaveBox.IsEnabled = enabled;
+        AmcFallbackBox.IsEnabled = enabled;
+        AmcForceDigitalModeBox.IsEnabled = enabled;
+        AmcSetpointDecreaseButton.IsEnabled = enabled;
+        AmcSetpointIncreaseButton.IsEnabled = enabled;
+        StopGasButton.IsEnabled = enabled;
+        RestoreGasButton.IsEnabled = enabled;
     }
 
     private void BuildServices()
@@ -1353,9 +1560,11 @@ public partial class MainWindow : Window
 
     private IGasFlowController CreateGasFlowController()
     {
-        return !_settings.Amc2100.Enabled
+        var settingsSnapshot = _settings.Amc2100.Clone();
+        IGasFlowController controller = !settingsSnapshot.Enabled
             ? new NoOpGasFlowController()
-            : new Amc2100GasFlowController(_settings.Amc2100);
+            : new Amc2100GasFlowController(settingsSnapshot);
+        return new SynchronizedGasFlowController(controller, _gasFlowGate);
     }
 
     private IRelayBankController CreateProcessOutputController()
@@ -1531,25 +1740,49 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private bool ValidateAmc2100Setup()
+    private bool ValidateAmc2100Setup(bool requireEnabled = false)
     {
-        _settings.Amc2100.Normalize();
-
-        if (!_settings.Amc2100.Enabled)
+        var settings = _settings.Amc2100;
+        if (!settings.Enabled)
         {
+            if (requireEnabled)
+            {
+                ShowSetupWarning(T("message.amcDisabled"));
+                return false;
+            }
+
             return true;
         }
 
-        var availablePorts = SerialPort.GetPortNames();
-        if (!availablePorts.Contains(_settings.Amc2100.PortName, StringComparer.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(settings.PortName))
         {
-            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.amcComMissing"), _settings.Amc2100.PortName));
+            ShowSetupWarning(T("message.amcPortRequired"));
             return false;
         }
 
-        if (_settings.Amc2100.SlaveAddress is < 1 or > 247)
+        if (settings.BaudRate <= 0)
+        {
+            ShowSetupWarning(T("message.amcBaudInvalid"));
+            return false;
+        }
+
+        if (settings.SlaveAddress is < 1 or > 247)
         {
             ShowSetupWarning(T("message.amcSlaveInvalid"));
+            return false;
+        }
+
+        if (!double.IsFinite(settings.FallbackRestoreSetpointMlMin) ||
+            settings.FallbackRestoreSetpointMlMin < 0)
+        {
+            ShowSetupWarning(T("message.amcSetpointInvalid"));
+            return false;
+        }
+
+        var availablePorts = SerialPort.GetPortNames();
+        if (!availablePorts.Contains(settings.PortName, StringComparer.OrdinalIgnoreCase))
+        {
+            ShowSetupWarning(string.Format(CultureInfo.InvariantCulture, T("message.amcComMissing"), settings.PortName));
             return false;
         }
 
@@ -1927,7 +2160,7 @@ public partial class MainWindow : Window
 
         StartButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing && _monitoringCts is null;
         StopButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing && _monitoringCts is not null;
-        SaveSettingsButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        SaveSettingsButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing && !_isGasFlowActionBusy;
         ExportExperimentButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
         ExportExperimentMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
         AdvancedSettingsMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
@@ -2022,6 +2255,7 @@ public partial class MainWindow : Window
 
     private async Task SaveSettingsFromUiAsync()
     {
+        var amcSettings = ReadAmc2100SettingsFromUi();
         _settings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? _settings.Language);
         _settings.WindowTitleContains = WindowTitleBox.Text.Trim();
         _settings.ThresholdC = ParseDouble(ThresholdBox.Text, nameof(_settings.ThresholdC));
@@ -2032,12 +2266,6 @@ public partial class MainWindow : Window
         _settings.Ocr.TesseractExePath = TesseractPathBox.Text.Trim();
         _settings.Relay.PortName = PortBox.Text.Trim();
         _settings.Relay.DryRun = DryRunBox.IsChecked == true;
-        _settings.Amc2100.Enabled = AmcEnabledBox.IsChecked == true;
-        _settings.Amc2100.PortName = AmcPortBox.Text.Trim();
-        _settings.Amc2100.BaudRate = ParseInt(AmcBaudBox.Text, nameof(_settings.Amc2100.BaudRate));
-        _settings.Amc2100.SlaveAddress = ParseInt(AmcSlaveBox.Text, nameof(_settings.Amc2100.SlaveAddress));
-        _settings.Amc2100.FallbackRestoreSetpointMlMin = ParseDouble(AmcFallbackBox.Text, nameof(_settings.Amc2100.FallbackRestoreSetpointMlMin));
-        _settings.Amc2100.ForceDigitalControlMode = AmcForceDigitalModeBox.IsChecked == true;
         _settings.Relay.G2000Can.WritableSetpoints.VoltageV = ParseDouble(G2000VoltageBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.VoltageV));
         _settings.Relay.G2000Can.WritableSetpoints.FrequencyKhz = ParseDouble(G2000FrequencyBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.FrequencyKhz));
         _settings.Relay.G2000Can.WritableSetpoints.DutyPercent = ParseDouble(G2000DutyBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.DutyPercent));
@@ -2054,12 +2282,70 @@ public partial class MainWindow : Window
         ValidateG2000U2SettingsForUi();
         _settings.Relay.G2000Can.ValidateWritableSetpoints(_settings.Relay.G2000Can.WritableSetpoints);
         _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
-        _settings.Amc2100.Normalize();
+        _settings.Amc2100 = amcSettings;
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
         _experimentRecorder?.UpdateSettings(_settings);
         ApplyG2000RecoveryPolicyToController();
         UpdateGasFlowDisplay();
         UpdateG2000SettingsSummary();
+    }
+
+    private async Task SaveAmc2100SettingsFromUiAsync()
+    {
+        _settings.Amc2100 = ReadAmc2100SettingsFromUi();
+        await _settingsStore.SaveAsync(_settings, CancellationToken.None);
+        _experimentRecorder?.UpdateSettings(_settings);
+        UpdateGasFlowDisplay();
+    }
+
+    private Amc2100Settings ReadAmc2100SettingsFromUi()
+    {
+        var candidate = _settings.Amc2100.Clone();
+        candidate.Enabled = AmcEnabledBox.IsChecked == true;
+        candidate.ForceDigitalControlMode = AmcForceDigitalModeBox.IsChecked == true;
+
+        var portName = AmcPortBox.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(portName))
+        {
+            candidate.PortName = portName;
+        }
+        else if (candidate.Enabled)
+        {
+            throw new InvalidOperationException(T("message.amcPortRequired"));
+        }
+
+        if (int.TryParse(AmcBaudBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var baudRate) &&
+            baudRate > 0)
+        {
+            candidate.BaudRate = baudRate;
+        }
+        else if (candidate.Enabled)
+        {
+            throw new InvalidOperationException(T("message.amcBaudInvalid"));
+        }
+
+        if (int.TryParse(AmcSlaveBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var slaveAddress) &&
+            slaveAddress is >= 1 and <= 247)
+        {
+            candidate.SlaveAddress = slaveAddress;
+        }
+        else if (candidate.Enabled)
+        {
+            throw new InvalidOperationException(T("message.amcSlaveInvalid"));
+        }
+
+        if (double.TryParse(AmcFallbackBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var targetFlow) &&
+            double.IsFinite(targetFlow) &&
+            targetFlow >= 0)
+        {
+            candidate.FallbackRestoreSetpointMlMin = targetFlow;
+        }
+        else if (candidate.Enabled)
+        {
+            throw new InvalidOperationException(T("message.amcSetpointInvalid"));
+        }
+
+        return candidate;
     }
 
     private async Task SaveG2000SettingsFromUiAsync()
@@ -2435,6 +2721,8 @@ public partial class MainWindow : Window
         SetToolTip(AmcBaudBox, "tooltip.amcBaud");
         SetToolTip(AmcSlaveBox, "tooltip.amcSlave");
         SetToolTip(AmcFallbackBox, "tooltip.amcFallback");
+        SetToolTip(AmcSetpointDecreaseButton, "tooltip.amcSetpointStep");
+        SetToolTip(AmcSetpointIncreaseButton, "tooltip.amcSetpointStep");
         SetToolTip(AmcForceDigitalModeBox, "tooltip.amcDigitalMode");
         SetToolTip(StopGasButton, "tooltip.stopGas");
         SetToolTip(RestoreGasButton, "tooltip.restoreGas");
@@ -2719,18 +3007,53 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RefreshGasFlowAsync(bool force = false)
+    private async Task<double?> RefreshGasFlowAsync(bool force = false)
     {
-        if (_isRefreshingGasFlow || _settings is null)
+        if (_settings is null)
         {
-            return;
+            return null;
         }
 
+        var activeRead = _gasFlowReadTask;
+        if (activeRead is { IsCompleted: false })
+        {
+            if (!force)
+            {
+                return _lastGasFlowMlMin;
+            }
+
+            try
+            {
+                await activeRead;
+            }
+            catch
+            {
+                // The forced read below provides the current result.
+            }
+        }
+
+        var readTask = ReadGasFlowCoreAsync(force);
+        _gasFlowReadTask = readTask;
+        try
+        {
+            return await readTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_gasFlowReadTask, readTask))
+            {
+                _gasFlowReadTask = null;
+            }
+            UpdateGasFlowDisplay();
+        }
+    }
+
+    private async Task<double?> ReadGasFlowCoreAsync(bool force)
+    {
         if (!_settings.Amc2100.Enabled)
         {
             _lastGasFlowMlMin = null;
-            UpdateGasFlowDisplay();
-            return;
+            return null;
         }
 
         if (!force && !ValidateAmcPortExistsSilently())
@@ -2741,29 +3064,30 @@ public partial class MainWindow : Window
                 enabled: true,
                 "unavailable",
                 "Configured AMC2100 serial port was not found.");
-            UpdateGasFlowDisplay();
-            return;
+            return null;
         }
 
-        _isRefreshingGasFlow = true;
         try
         {
-            _lastGasFlowMlMin = await CreateGasFlowController().ReadActualFlowAsync(CancellationToken.None);
+            _lastGasFlowMlMin = await ExecuteGasFlowIoAsync(
+                static (controller, cancellationToken) => controller.ReadActualFlowAsync(cancellationToken));
             _experimentRecorder?.RecordGasFlow(
                 _lastGasFlowMlMin,
                 enabled: true,
                 "success",
                 force ? "forced read" : "periodic read");
+            return _lastGasFlowMlMin;
+        }
+        catch (OperationCanceledException) when (_gasFlowLifetimeCts.IsCancellationRequested)
+        {
+            _lastGasFlowMlMin = null;
+            return null;
         }
         catch (Exception ex)
         {
             _lastGasFlowMlMin = null;
             _experimentRecorder?.RecordGasFlow(null, enabled: true, "error", ex.Message);
-        }
-        finally
-        {
-            _isRefreshingGasFlow = false;
-            UpdateGasFlowDisplay();
+            return null;
         }
     }
 
@@ -3210,6 +3534,11 @@ public partial class MainWindow : Window
     private static string FormatDoubleForEvidence(double? value)
     {
         return value?.ToString("G17", CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    private static string FormatOptionalDoubleForEvidence(double? value)
+    {
+        return value is null ? "unavailable" : FormatDoubleForEvidence(value);
     }
 
     private static string FormatG2000SetpointsForEvidence(G2000WritableSetpoints setpoints)

@@ -32,6 +32,28 @@ public sealed class Amc2100Settings
 
     public int AnalogControlModeValue { get; set; } = 2;
 
+    public Amc2100Settings Clone()
+    {
+        return new Amc2100Settings
+        {
+            Enabled = Enabled,
+            PortName = PortName,
+            BaudRate = BaudRate,
+            SlaveAddress = SlaveAddress,
+            ForceDigitalControlMode = ForceDigitalControlMode,
+            FallbackRestoreSetpointMlMin = FallbackRestoreSetpointMlMin,
+            ActualFlowHighRegister = ActualFlowHighRegister,
+            ActualFlowLowRegister = ActualFlowLowRegister,
+            SetpointHighRegister = SetpointHighRegister,
+            SetpointLowRegister = SetpointLowRegister,
+            DeviceAddressRegister = DeviceAddressRegister,
+            BaudRateRegister = BaudRateRegister,
+            ControlModeRegister = ControlModeRegister,
+            DigitalControlModeValue = DigitalControlModeValue,
+            AnalogControlModeValue = AnalogControlModeValue
+        };
+    }
+
     public void Normalize()
     {
         if (string.IsNullOrWhiteSpace(PortName))
