@@ -105,6 +105,26 @@ public static class Amc2100ModbusFrameBuilder
         return expected == actual;
     }
 
+    public static bool ValidateWriteSingleRegisterResponse(
+        ReadOnlySpan<byte> request,
+        ReadOnlySpan<byte> response)
+    {
+        return request.Length == 8 &&
+               response.Length == 8 &&
+               ValidateCrc(response) &&
+               request.SequenceEqual(response);
+    }
+
+    public static bool ValidateWriteMultipleRegistersResponse(
+        ReadOnlySpan<byte> request,
+        ReadOnlySpan<byte> response)
+    {
+        return request.Length >= 9 &&
+               response.Length == 8 &&
+               ValidateCrc(response) &&
+               response[..6].SequenceEqual(request[..6]);
+    }
+
     private static void WriteCrc(Span<byte> frame)
     {
         var crc = ComputeCrc(frame[..^2]);

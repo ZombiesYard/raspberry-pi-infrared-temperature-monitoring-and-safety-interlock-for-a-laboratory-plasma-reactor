@@ -60,14 +60,17 @@ This branch is also being extended for `AMC2100` gas mass flow control:
 
 The current software-side AMC2100 logic is:
 
-- On trip, write the AMC2100 set-flow register to `0`
-- Then open the G2000 interlock channels
-- On reset / auto reset, close the interlock channels first, then restore the AMC2100 set flow from the cached previous setpoint or from a configured fallback setpoint
-- The top dashboard also shows a live `Gas Flow` readout from the AMC2100 actual-flow registers over RS485
+- AMC2100 gas control remains independent from the temperature interlock.
+- Enable AMC2100 gas control before sending a hardware flow command; disabled commands are blocked rather than silently treated as successful.
+- `Save Settings` applies the displayed target flow when AMC2100 is enabled.
+- The target-flow `-` / `+` buttons change the setpoint by 10 mL/min and write it immediately, without a separate save action.
+- `Stop Gas Flow` writes `0`; `Apply Gas Setpoint` writes the configured target.
+- Periodic actual-flow reads and manual writes share one serialized command path so they cannot contend for the same COM port.
+- The top dashboard shows the live `Gas Flow` readout from the AMC2100 actual-flow registers over RS485.
 
-This means the software can implement AMC2100 gas start/stop in software. It does not mean the device has a separate documented hard-reset register. In the current prototype, "software reset" for AMC2100 means "write 0 to stop gas, then write back the desired setpoint to resume flow."
+This software control does not represent a separate documented hard-reset register. The UI reports a target command as successful only when the Modbus write response confirms registers `2-3` and an immediate readback matches the requested setpoint. That verifies the device setpoint register, not physical gas flow; the live `Gas Flow` card and onsite observation remain the physical-flow evidence.
 
-In bench testing, the AMC2100 local panel may continue to show `0` or may not visibly refresh the setpoint unless you navigate on the device itself. For RS485 validation in this branch, use the software `Gas Flow` card as the primary live indicator.
+In bench testing, the AMC2100 local panel may continue to show `0` or may not visibly refresh the setpoint unless you navigate on the device itself. Check the software readback result and the live `Gas Flow` value; do not infer physical flow from the command result alone.
 
 For a practical software-driven validation flow, use the engineering checklist:
 
@@ -371,6 +374,7 @@ During experiment:
 - Do not minimize HikmicroAnalyzer.
 - Do not cover the temperature text.
 - Watch `Raw OCR text` if the displayed temperature looks wrong.
+- HIKMICRO automatic image calibration can briefly expose exactly `0 C` in the overlay. Exact zero is treated as `NO READING`, resets the automatic-recovery stability timer, and cannot by itself restore a tripped interlock.
 - If `NO READING` appears repeatedly, pause and fix ROI/OCR before relying on the software.
 
 After trip:
@@ -424,7 +428,7 @@ AMC2100 control. A recording failure therefore does not change the interlock dec
 Each run contains:
 
 - `temperature-samples.csv`: session-only OCR temperature samples, status, alarm reason, relay action, and ROI.
-- `events.csv`: monitoring lifecycle, temperature trips and recoveries, engineering relay actions, G2000 commands, AMC2100 commands, and UI errors. Hardware-control rows use `command-completed` plus `hardware_feedback=false`; this means the software call returned without an exception, not that physical movement was independently verified.
+- `events.csv`: monitoring lifecycle, temperature trips and recoveries, engineering relay actions, G2000 commands, AMC2100 commands, and UI errors. AMC2100 target rows include `setpoint_readback=true` only after registers `2-3` read back the requested value. Other hardware rows may still use `hardware_feedback=false`, which means the software call returned without independent proof of physical movement.
 - `g2000-telemetry.csv`: G2000 state, fault data, targets, actual values, automatic stage, trip latch, and raw CAN frames. Normal telemetry is sampled at most once per second, while communication, fault, trip, HV, mode, automatic-stage, and target-setpoint changes are recorded immediately.
 - `gas-flow.csv`: AMC2100 periodic and forced actual-flow reads in `actual_flow_ml_min`, including unavailable/error outcomes.
 - `settings-start.json` and `settings-latest.json`: settings at application start and the latest saved settings.

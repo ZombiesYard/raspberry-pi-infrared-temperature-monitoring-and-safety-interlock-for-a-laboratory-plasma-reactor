@@ -21,19 +21,21 @@ public sealed class TemperatureTextParser
         }
 
         var normalized = ocrText.Replace('，', ',').Replace('．', '.');
-        var values = TemperaturePattern.Matches(normalized)
+        var temperatureMatches = TemperaturePattern.Matches(normalized);
+        var values = temperatureMatches
             .Select(ParseMatch)
-            .Where(static value => value is >= -50 and <= 300)
+            .Where(IsPlausibleReading)
             .ToList();
 
-        if (values.Count == 0)
+        if (temperatureMatches.Count > 0)
         {
-            values = BareNumberPattern.Matches(normalized)
-                .Select(ParseMatch)
-                .Where(static value => value is >= -50 and <= 300)
-                .ToList();
+            return values.Count == 0 ? null : values.Max();
         }
 
+        values = BareNumberPattern.Matches(normalized)
+            .Select(ParseMatch)
+            .Where(IsPlausibleReading)
+            .ToList();
         return values.Count == 0 ? null : values.Max();
     }
 
@@ -41,5 +43,12 @@ public sealed class TemperatureTextParser
     {
         var value = match.Groups["value"].Value.Replace(',', '.');
         return double.Parse(value, CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsPlausibleReading(double value)
+    {
+        // HikmicroAnalyzer can briefly display exactly 0.0 during shutter calibration.
+        // Treat that sentinel as no reading so it cannot advance automatic recovery.
+        return value is >= -50 and <= 300 && value != 0d;
     }
 }

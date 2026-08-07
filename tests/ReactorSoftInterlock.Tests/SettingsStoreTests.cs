@@ -13,6 +13,42 @@ public sealed class SettingsStoreTests
     }
 
     [Fact]
+    public void Amc2100CloneIsIndependent()
+    {
+        var original = new Amc2100Settings { PortName = "COM7", FallbackRestoreSetpointMlMin = 600 };
+
+        var clone = original.Clone();
+        clone.PortName = "COM8";
+        clone.FallbackRestoreSetpointMlMin = 700;
+
+        Assert.Equal("COM7", original.PortName);
+        Assert.Equal(600, original.FallbackRestoreSetpointMlMin);
+    }
+
+    [Fact]
+    public async Task ConcurrentSavesDoNotCorruptSettingsFile()
+    {
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var store = new SettingsStore(tempFile);
+            var saves = Enumerable.Range(1, 20)
+                .Select(index => store.SaveAsync(
+                    new AppSettings { PollIntervalMs = 1000 + index },
+                    CancellationToken.None));
+
+            await Task.WhenAll(saves);
+            var loaded = await store.LoadAsync(CancellationToken.None);
+
+            Assert.InRange(loaded.PollIntervalMs, 1001, 1020);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
     public async Task LoadAsyncPopulatesRelayBankDefaultsForLegacyConfig()
     {
         var tempFile = Path.GetTempFileName();

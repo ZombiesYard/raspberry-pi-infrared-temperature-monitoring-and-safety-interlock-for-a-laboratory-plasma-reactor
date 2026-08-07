@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.IO.Ports;
 using ReactorSoftInterlock.Application.Ports;
 using ReactorSoftInterlock.Infrastructure.Settings;
 
@@ -8,32 +7,44 @@ namespace ReactorSoftInterlock.Infrastructure.Gas;
 public sealed class Amc2100GasFlowController : IGasFlowController
 {
     private readonly Amc2100Settings _settings;
+    private readonly IAmc2100SerialPortFactory _portFactory;
     private readonly object _sync = new();
     private double? _cachedRestoreSetpointMlMin;
 
     public Amc2100GasFlowController(Amc2100Settings settings)
+        : this(settings, new Amc2100SerialPortFactory())
     {
-        _settings = settings;
+    }
+
+    internal Amc2100GasFlowController(
+        Amc2100Settings settings,
+        IAmc2100SerialPortFactory portFactory)
+    {
+        _settings = settings.Clone();
         _settings.Normalize();
+        _portFactory = portFactory;
     }
 
     public Task StopFlowAsync(CancellationToken cancellationToken)
     {
         lock (_sync)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var port = OpenPort();
             if (_settings.ForceDigitalControlMode)
             {
-                EnsureDigitalMode(port);
+                EnsureDigitalMode(port, cancellationToken);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             var currentSetpoint = ReadFloatRegisterPair(port, (ushort)_settings.SetpointHighRegister);
             if (currentSetpoint > 0)
             {
                 _cachedRestoreSetpointMlMin = currentSetpoint;
             }
 
-            WriteFloatRegisterPair(port, (ushort)_settings.SetpointHighRegister, 0f);
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteAndVerifySetpoint(port, 0f);
             return Task.CompletedTask;
         }
     }
@@ -42,6 +53,7 @@ public sealed class Amc2100GasFlowController : IGasFlowController
     {
         lock (_sync)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var restoreTarget = _cachedRestoreSetpointMlMin ?? _settings.FallbackRestoreSetpointMlMin;
             if (restoreTarget <= 0)
             {
@@ -51,10 +63,11 @@ public sealed class Amc2100GasFlowController : IGasFlowController
             using var port = OpenPort();
             if (_settings.ForceDigitalControlMode)
             {
-                EnsureDigitalMode(port);
+                EnsureDigitalMode(port, cancellationToken);
             }
 
-            WriteFloatRegisterPair(port, (ushort)_settings.SetpointHighRegister, (float)restoreTarget);
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteAndVerifySetpoint(port, (float)restoreTarget);
             return Task.CompletedTask;
         }
     }
@@ -63,14 +76,16 @@ public sealed class Amc2100GasFlowController : IGasFlowController
     {
         lock (_sync)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var normalizedTarget = Math.Max(0d, targetFlowMlMin);
             using var port = OpenPort();
             if (_settings.ForceDigitalControlMode)
             {
-                EnsureDigitalMode(port);
+                EnsureDigitalMode(port, cancellationToken);
             }
 
-            WriteFloatRegisterPair(port, (ushort)_settings.SetpointHighRegister, (float)normalizedTarget);
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteAndVerifySetpoint(port, (float)normalizedTarget);
             if (normalizedTarget > 0)
             {
                 _cachedRestoreSetpointMlMin = normalizedTarget;
@@ -84,40 +99,27 @@ public sealed class Amc2100GasFlowController : IGasFlowController
     {
         lock (_sync)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var port = OpenPort();
             var actualFlow = ReadFloatRegisterPair(port, (ushort)_settings.ActualFlowHighRegister);
             return Task.FromResult<double?>((double)actualFlow);
         }
     }
 
-    private SerialPort OpenPort()
-    {
-        var port = new SerialPort(_settings.PortName, _settings.BaudRate)
-        {
-            ReadTimeout = 1000,
-            WriteTimeout = 1000,
-            Handshake = Handshake.None,
-            DataBits = 8,
-            Parity = Parity.None,
-            StopBits = StopBits.One
-        };
-        port.Open();
-        port.DiscardInBuffer();
-        port.DiscardOutBuffer();
-        return port;
-    }
+    private IAmc2100SerialPort OpenPort() => _portFactory.Open(_settings);
 
-    private void EnsureDigitalMode(SerialPort port)
+    private void EnsureDigitalMode(IAmc2100SerialPort port, CancellationToken cancellationToken)
     {
         var request = Amc2100ModbusFrameBuilder.BuildWriteSingleRegister(
             (byte)_settings.SlaveAddress,
             (ushort)_settings.ControlModeRegister,
             (ushort)_settings.DigitalControlModeValue);
 
+        cancellationToken.ThrowIfCancellationRequested();
         WriteAndExpectEcho(port, request);
     }
 
-    private float ReadFloatRegisterPair(SerialPort port, ushort startAddress)
+    private float ReadFloatRegisterPair(IAmc2100SerialPort port, ushort startAddress)
     {
         var request = Amc2100ModbusFrameBuilder.BuildReadHoldingRegisters((byte)_settings.SlaveAddress, startAddress, 2);
         port.Write(request, 0, request.Length);
@@ -134,23 +136,43 @@ public sealed class Amc2100GasFlowController : IGasFlowController
         return Amc2100ModbusFrameBuilder.RegistersToFloat(high, low);
     }
 
-    private void WriteFloatRegisterPair(SerialPort port, ushort startAddress, float value)
+    private void WriteFloatRegisterPair(IAmc2100SerialPort port, ushort startAddress, float value)
     {
         var registers = Amc2100ModbusFrameBuilder.FloatToRegisters(value);
         var request = Amc2100ModbusFrameBuilder.BuildWriteMultipleRegisters((byte)_settings.SlaveAddress, startAddress, registers);
         port.Write(request, 0, request.Length);
         var response = ReadExact(port, 8);
         ValidateResponse(response, 0x10);
+        if (!Amc2100ModbusFrameBuilder.ValidateWriteMultipleRegistersResponse(request, response))
+        {
+            throw new InvalidOperationException("AMC2100 write response did not confirm the requested setpoint registers.");
+        }
     }
 
-    private void WriteAndExpectEcho(SerialPort port, byte[] request)
+    private void WriteAndExpectEcho(IAmc2100SerialPort port, byte[] request)
     {
         port.Write(request, 0, request.Length);
         var response = ReadExact(port, 8);
         ValidateResponse(response, request[1]);
+        if (!Amc2100ModbusFrameBuilder.ValidateWriteSingleRegisterResponse(request, response))
+        {
+            throw new InvalidOperationException("AMC2100 write response did not echo the requested control register.");
+        }
     }
 
-    private static byte[] ReadExact(SerialPort port, int length)
+    private void WriteAndVerifySetpoint(IAmc2100SerialPort port, float target)
+    {
+        WriteFloatRegisterPair(port, (ushort)_settings.SetpointHighRegister, target);
+        var readBack = ReadFloatRegisterPair(port, (ushort)_settings.SetpointHighRegister);
+        var tolerance = Math.Max(0.1f, Math.Abs(target) * 0.0001f);
+        if (!float.IsFinite(readBack) || Math.Abs(readBack - target) > tolerance)
+        {
+            throw new InvalidOperationException(
+                $"AMC2100 setpoint verification failed: requested {target:0.###} mL/min, read back {readBack:0.###} mL/min.");
+        }
+    }
+
+    private static byte[] ReadExact(IAmc2100SerialPort port, int length)
     {
         var buffer = new byte[length];
         var offset = 0;

@@ -6,6 +6,7 @@ public sealed class SettingsStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly string _path;
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
 
     public SettingsStore(string path)
     {
@@ -36,17 +37,25 @@ public sealed class SettingsStore
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken)
     {
-        settings.Relay.Normalize();
-        settings.Amc2100.Normalize();
-        settings.ExperimentUpload ??= new ExperimentUploadSettings();
-        settings.ExperimentUpload.Normalize();
-        var directory = Path.GetDirectoryName(_path);
-        if (!string.IsNullOrWhiteSpace(directory))
+        await _saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            Directory.CreateDirectory(directory);
-        }
+            settings.Relay.Normalize();
+            settings.Amc2100.Normalize();
+            settings.ExperimentUpload ??= new ExperimentUploadSettings();
+            settings.ExperimentUpload.Normalize();
+            var directory = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
 
-        await using var stream = File.Create(_path);
-        await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken).ConfigureAwait(false);
+            await using var stream = File.Create(_path);
+            await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
     }
 }

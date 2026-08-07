@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <InformationalVersion>2026.07.31-automatic-experiment-upload</InformationalVersion>
+    <InformationalVersion>2026.08.07-amc2100-live-setpoint-control</InformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ReactorSoftInterlock.Application\ReactorSoftInterlock.Application.csproj" />

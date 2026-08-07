@@ -9,8 +9,8 @@ Sie ist fuer den Fall gedacht, dass das Relais bereits per Software geschaltet w
 ## Ziel
 
 - Bestaetigen, dass das softwaregesteuerte Oeffnen des Relais den G2000 wirklich sperrt.
-- Wenn AMC2100 aktiviert ist, auch bestaetigen, dass beim Trip der Gas-Sollwert auf `0` gesetzt wird.
-- Wenn AMC2100 aktiviert ist, die Live-Karte `Gasfluss` in der Software als wichtigste Anzeige fuer RS485-Tests verwenden.
+- AMC2100 mit `Gasfluss stoppen`, `Gas-Sollwert anwenden` und den Zielwert-Tasten `-` / `+` unabhaengig testen.
+- Sowohl das Ruecklesen des Sollwerts als auch den Live-`Gasfluss` pruefen; ein bestaetigter Sollwert allein beweist keinen physischen Durchfluss.
 - Bestaetigen, was nach dem softwaregesteuerten Schliessen des Relais passiert.
 - Bestaetigen, ob ein Zweig, eine Gruppe oder alle vier Zweige benoetigt werden.
 
@@ -128,7 +128,6 @@ Nur ausfuehren, wenn die statischen Tests verstanden sind und das Labor zustimmt
 - Die Aktion ausloesen, die spaeter real verwendet werden soll:
   - bevorzugter Endtest: `Disconnect All Interlocks`
   - optional vorher: Einzelkanal oder einzelne Gruppe
-  - wenn AMC2100 aktiviert ist, zusaetzlich pruefen, dass der Gas-Sollwert auf `0` geschrieben wird
 
 Sofort beobachten:
 
@@ -194,5 +193,10 @@ HV resumes automatically: __
 Manual ON required: __
 Manual reset required: __
 Power-cycle required: __
-AMC2100 gas restored: __
+
+Unabhaengiger AMC2100-Test:
+Gesendeter Soll-Durchfluss: __
+Zurueckgelesener Sollwert: __
+Ist-Durchfluss nach dem Befehl: __
+Physischer Gasfluss beobachtet: ja / nein
 ```
