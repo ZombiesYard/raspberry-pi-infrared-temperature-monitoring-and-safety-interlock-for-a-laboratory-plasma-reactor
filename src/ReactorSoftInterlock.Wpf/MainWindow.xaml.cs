@@ -54,6 +54,9 @@ public partial class MainWindow : Window
     private double? _lastGasFlowMlMin;
     private MonitorStatus _currentStatus = MonitorStatus.Idle;
     private G2000TelemetrySnapshot _lastG2000Snapshot = new();
+    private readonly object _g2000TelemetryUiSync = new();
+    private G2000TelemetrySnapshot? _pendingG2000TelemetryUiSnapshot;
+    private bool _g2000TelemetryUiUpdateScheduled;
     private string? _lastG2000ConnectionError;
     private string? _relayRuntimeKey;
     private readonly SemaphoreSlim _branchInterlockGate = new(1, 1);
@@ -418,6 +421,46 @@ public partial class MainWindow : Window
         UpdateG2000SettingsSummary();
     }
 
+    private G2000ConnectionAssessmentKind AssessCurrentG2000Connection()
+    {
+        var snapshot = _g2000Controller?.Snapshot ?? _lastG2000Snapshot;
+        return G2000ConnectionAssessment.Assess(snapshot, _lastG2000ConnectionError);
+    }
+
+    private async Task<G2000ConnectionAssessmentKind> WaitForG2000CommunicationAsync(TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        G2000ConnectionAssessmentKind assessment;
+        do
+        {
+            assessment = AssessCurrentG2000Connection();
+            if (assessment == G2000ConnectionAssessmentKind.Confirmed ||
+                assessment == G2000ConnectionAssessmentKind.PcanUnavailable ||
+                DateTimeOffset.UtcNow >= deadline)
+            {
+                return assessment;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+        }
+        while (!_shutdownPreparing);
+
+        return assessment;
+    }
+
+    private string DescribeG2000ConnectionProblem(G2000ConnectionAssessmentKind assessment)
+    {
+        return assessment switch
+        {
+            G2000ConnectionAssessmentKind.PcanUnavailable =>
+                string.IsNullOrWhiteSpace(_lastG2000ConnectionError)
+                    ? T("message.g2000PcanUnavailableDetail")
+                    : _lastG2000ConnectionError,
+            G2000ConnectionAssessmentKind.NoRecentTelemetry => T("message.g2000TelemetryMissingDetail"),
+            _ => string.Empty
+        };
+    }
+
     private async void SelectRoiButton_Click(object sender, RoutedEventArgs e)
     {
         if (!TryBeginMonitoringLifecycle())
@@ -427,7 +470,10 @@ public partial class MainWindow : Window
 
         try
         {
-            await SaveSettingsFromUiAsync();
+            if (!await SaveSettingsFromUiAsync())
+            {
+                return;
+            }
             if (_shutdownPreparing)
             {
                 return;
@@ -448,10 +494,12 @@ public partial class MainWindow : Window
             }
 
             var selected = selector.SelectedRect.Value;
-            _settings.Roi.X = (int)Math.Max(0, selected.X - windowBounds.Left);
-            _settings.Roi.Y = (int)Math.Max(0, selected.Y - windowBounds.Top);
-            _settings.Roi.Width = (int)Math.Max(1, selected.Width);
-            _settings.Roi.Height = (int)Math.Max(1, selected.Height);
+            var candidateSettings = _settings.Clone();
+            candidateSettings.Roi.X = (int)Math.Max(0, selected.X - windowBounds.Left);
+            candidateSettings.Roi.Y = (int)Math.Max(0, selected.Y - windowBounds.Top);
+            candidateSettings.Roi.Width = (int)Math.Max(1, selected.Width);
+            candidateSettings.Roi.Height = (int)Math.Max(1, selected.Height);
+            await ApplySettingsCandidateAtRuntimeBoundaryAsync(candidateSettings);
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
             if (_shutdownPreparing)
             {
@@ -483,7 +531,10 @@ public partial class MainWindow : Window
         }
         try
         {
-            await SaveSettingsFromUiAsync();
+            if (!await SaveSettingsFromUiAsync())
+            {
+                return;
+            }
             if (_shutdownPreparing)
             {
                 return;
@@ -541,9 +592,20 @@ public partial class MainWindow : Window
 
     private async void ResetButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
-            if (!_stateMachine.CanReset(_lastTemperatureC))
+            if (_monitoringService is null)
+            {
+                throw new InvalidOperationException(T("message.monitoringServiceUnavailable"));
+            }
+
+            var relayAction = await _monitoringService.TryManualResetAsync(_lastTemperatureC, CancellationToken.None);
+            if (relayAction is null)
             {
                 _experimentRecorder?.RecordEvent(
                     "interlock",
@@ -554,8 +616,6 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var relayAction = await CreateProcessOutputController().ResetAsync(CancellationToken.None);
-            _stateMachine.Reset(_lastTemperatureC);
             SetStatus(MonitorStatus.Monitoring);
             SetAllChannelStates(true);
             AlarmReasonText.Text = string.Empty;
@@ -571,13 +631,21 @@ public partial class MainWindow : Window
             _experimentRecorder?.RecordEvent("interlock", "manual-reset", "failed", ex.Message);
             ShowError(ex);
         }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
     private async void TestRelayButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
-            await SaveSettingsFromUiAsync();
             if (!ValidateBranchInterlockSetup(requireRestore: false))
             {
                 _experimentRecorder?.RecordEvent(
@@ -603,13 +671,25 @@ public partial class MainWindow : Window
             _experimentRecorder?.RecordEvent("relay", "open-all-interlocks", "failed", ex.Message);
             ShowError(ex);
         }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
     private async void TestRelayResetButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
-            await SaveSettingsFromUiAsync();
+            if (!await SaveSettingsFromUiAsync())
+            {
+                return;
+            }
             if (!ValidateBranchInterlockSetup(requireRestore: true))
             {
                 _experimentRecorder?.RecordEvent(
@@ -635,6 +715,10 @@ public partial class MainWindow : Window
             _experimentRecorder?.RecordEvent("relay", "close-all-interlocks", "failed", ex.Message);
             ShowError(ex);
         }
+        finally
+        {
+            EndMonitoringLifecycle();
+        }
     }
 
     private async void ChannelOpenButton_Click(object sender, RoutedEventArgs e)
@@ -649,9 +733,18 @@ public partial class MainWindow : Window
 
     private async Task ExecuteChannelActionAsync(object sender, bool closed, string footerTemplate)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
-            await SaveSettingsFromUiAsync();
+            if (closed && !await SaveSettingsFromUiAsync())
+            {
+                return;
+            }
+
             if (sender is not FrameworkElement { Tag: string tag } || !int.TryParse(tag, out var channelNumber))
             {
                 return;
@@ -685,6 +778,10 @@ public partial class MainWindow : Window
                 "failed",
                 ex.Message);
             ShowError(ex);
+        }
+        finally
+        {
+            EndMonitoringLifecycle();
         }
     }
 
@@ -804,22 +901,65 @@ public partial class MainWindow : Window
         {
             var applyErrors = new List<string>();
             var candidateSettings = BuildSettingsCandidateFromUi();
-            var restartMonitoringAfterSave = _monitoringCts is not null;
-            if (restartMonitoringAfterSave && !ValidateMonitoringSetup(candidateSettings))
+            var monitoringWasRunning = _monitoringCts is not null;
+            if (monitoringWasRunning && !CanApplyCandidateDuringMonitoring(candidateSettings, showWarning: true))
+            {
+                return;
+            }
+
+            if (monitoringWasRunning && !ValidateMonitoringSetup(candidateSettings))
             {
                 _experimentRecorder?.RecordEvent(
                     "settings",
-                    "validate-before-monitoring-restart",
+                    "validate-before-live-apply",
                     "blocked",
                     "The candidate setup did not pass validation; the existing monitoring loop and settings remain active.");
                 return;
             }
 
-            _settings = candidateSettings;
-            if (restartMonitoringAfterSave)
+            var monitoringApplied = false;
+            if (monitoringWasRunning)
             {
-                var pausedMonitoringTask = StopMonitoring(T("footer.monitoringStopped"));
-                await AwaitMonitoringTaskAsync(pausedMonitoringTask, CancellationToken.None);
+                if (_monitoringService is null)
+                {
+                    throw new InvalidOperationException(T("message.monitoringServiceUnavailable"));
+                }
+
+                try
+                {
+                    await ApplySettingsCandidateAtRuntimeBoundaryAsync(candidateSettings);
+                    monitoringApplied = true;
+                    _experimentRecorder?.RecordEvent(
+                        "settings",
+                        "apply-monitoring-live",
+                        "success",
+                        "monitoring_task_restarted=false; output_controller_rebuilt=false; g2000_reconnected=false");
+                }
+                catch (Exception ex)
+                {
+                    _experimentRecorder?.RecordEvent("settings", "apply-monitoring-live", "failed", ex.Message);
+                    ShowError(new InvalidOperationException(string.Format(
+                        CultureInfo.InvariantCulture,
+                        T("message.settingsMonitoringApplyFailed"),
+                        ex.Message), ex));
+                    return;
+                }
+            }
+            else
+            {
+                Volatile.Write(ref _settings, candidateSettings);
+                try
+                {
+                    monitoringApplied = await RebuildOrRestartMonitoringAsync(ensureG2000Connected: false);
+                }
+                catch (Exception ex)
+                {
+                    applyErrors.Add(string.Format(
+                        CultureInfo.InvariantCulture,
+                        T("message.settingsMonitoringApplyFailed"),
+                        ex.Message));
+                    _experimentRecorder?.RecordEvent("settings", "apply-monitoring", "failed", ex.Message);
+                }
             }
 
             var settingsPersisted = true;
@@ -840,30 +980,6 @@ public partial class MainWindow : Window
             ApplyG2000RecoveryPolicyToController();
             UpdateGasFlowDisplay();
             UpdateG2000SettingsSummary();
-
-            if (_shutdownPreparing)
-            {
-                return;
-            }
-
-            var monitoringApplied = false;
-            var monitoringRestoredAfterFailure = false;
-            try
-            {
-                monitoringApplied = await RebuildOrRestartMonitoringAsync(
-                    ensureG2000Connected: false,
-                    restartMonitoring: restartMonitoringAfterSave,
-                    configurationAlreadyValidated: restartMonitoringAfterSave);
-            }
-            catch (Exception ex)
-            {
-                monitoringRestoredAfterFailure = _monitoringCts is not null;
-                applyErrors.Add(string.Format(
-                    CultureInfo.InvariantCulture,
-                    T("message.settingsMonitoringApplyFailed"),
-                    ex.Message));
-                _experimentRecorder?.RecordEvent("settings", "apply-monitoring", "failed", ex.Message);
-            }
 
             if (_shutdownPreparing)
             {
@@ -914,18 +1030,38 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    await InitializeG2000ControllerAsync();
-                    if (!string.IsNullOrWhiteSpace(_lastG2000ConnectionError))
+                    G2000ConnectionAssessmentKind connectionAssessment;
+                    var actionName = monitoringWasRunning
+                        ? "check-after-live-settings"
+                        : "initialize-after-settings";
+                    if (monitoringWasRunning)
                     {
-                        applyErrors.Add(string.Format(
-                            CultureInfo.InvariantCulture,
-                            T("message.settingsG2000InitializeFailed"),
-                            _lastG2000ConnectionError));
-                        _experimentRecorder?.RecordEvent("g2000", "initialize-after-settings", "failed", _lastG2000ConnectionError);
+                        connectionAssessment = AssessCurrentG2000Connection();
                     }
                     else
                     {
+                        await InitializeG2000ControllerAsync();
+                        connectionAssessment = await WaitForG2000CommunicationAsync(TimeSpan.FromSeconds(2));
+                    }
+
+                    if (connectionAssessment == G2000ConnectionAssessmentKind.Confirmed)
+                    {
                         g2000Applied = true;
+                    }
+                    else
+                    {
+                        var technicalDetail = DescribeG2000ConnectionProblem(connectionAssessment);
+                        applyErrors.Add(string.Format(
+                            CultureInfo.InvariantCulture,
+                            T("message.settingsG2000InitializeFailed"),
+                            technicalDetail));
+                        _experimentRecorder?.RecordEvent(
+                            "g2000",
+                            actionName,
+                            "warning",
+                            monitoringWasRunning
+                                ? $"No reconnect was attempted while monitoring was running. {technicalDetail}"
+                                : technicalDetail);
                     }
                 }
                 catch (Exception ex)
@@ -949,10 +1085,10 @@ public partial class MainWindow : Window
                     ? $"{T("footer.settingsSaved")}: {_settingsPath}."
                     : T("footer.settingsAppliedNotPersisted"),
                 monitoringApplied
-                    ? T("footer.settingsMonitoringAppliedSuffix")
-                    : monitoringRestoredAfterFailure
-                        ? T("footer.settingsMonitoringRestoredSuffix")
-                        : T("footer.settingsMonitoringNotAppliedSuffix")
+                    ? monitoringWasRunning
+                        ? T("footer.settingsMonitoringLiveAppliedSuffix")
+                        : T("footer.settingsMonitoringAppliedSuffix")
+                    : T("footer.settingsMonitoringNotAppliedSuffix")
             };
 
             if (_stateMachine.IsTripped)
@@ -1004,7 +1140,16 @@ public partial class MainWindow : Window
 
         try
         {
-            await SaveSettingsFromUiAsync();
+            if (_monitoringCts is not null)
+            {
+                ShowSetupWarning(T("message.liveHardwareChangeBlocked"));
+                return;
+            }
+
+            if (!await SaveSettingsFromUiAsync())
+            {
+                return;
+            }
             if (_shutdownPreparing)
             {
                 return;
@@ -1020,7 +1165,9 @@ public partial class MainWindow : Window
                 return;
             }
 
-            _settings.Relay = window.ResultSettings;
+            var candidateSettings = _settings.Clone();
+            candidateSettings.Relay = window.ResultSettings;
+            Volatile.Write(ref _settings, candidateSettings);
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
             if (_shutdownPreparing)
             {
@@ -1112,9 +1259,17 @@ public partial class MainWindow : Window
 
     private async void RestoreMonitoringControlButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginMonitoringLifecycle())
+        {
+            return;
+        }
+
         try
         {
-            await SaveSettingsFromUiAsync();
+            if (!await SaveSettingsFromUiAsync())
+            {
+                return;
+            }
             if (!ValidateBranchInterlockSetup(requireRestore: true))
             {
                 _experimentRecorder?.RecordEvent(
@@ -1140,6 +1295,10 @@ public partial class MainWindow : Window
         {
             _experimentRecorder?.RecordEvent("relay", "restore-monitoring-control", "failed", ex.Message);
             ShowError(ex);
+        }
+        finally
+        {
+            EndMonitoringLifecycle();
         }
     }
 
@@ -1630,7 +1789,10 @@ public partial class MainWindow : Window
         _stateMachine = _stateMachine is null
             ? new InterlockStateMachine(interlockSettings)
             : _stateMachine.Reconfigure(interlockSettings);
-        var reader = new TesseractCliTemperatureReader(new WindowCapture(), new TemperatureTextParser(), _settings);
+        var reader = new TesseractCliTemperatureReader(
+            new WindowCapture(),
+            new TemperatureTextParser(),
+            () => Volatile.Read(ref _settings));
         var autoReset = new AutoResetOptions(_settings.AutoResetEnabled, _settings.RecoveryThresholdC, _settings.RecoveryStableSeconds);
         var monitoringOutput = new ExperimentRelayFailureObserver(
             CreateProcessOutputController(),
@@ -1828,6 +1990,7 @@ public partial class MainWindow : Window
         }
 
         await _g2000Controller!.EnsureConnectedAsync(CancellationToken.None);
+        _lastG2000ConnectionError = null;
         return _g2000Controller;
     }
 
@@ -2238,12 +2401,100 @@ public partial class MainWindow : Window
     private void G2000Controller_TelemetryUpdated(object? sender, G2000TelemetrySnapshot snapshot)
     {
         _experimentRecorder?.RecordG2000Telemetry(snapshot);
-        Dispatcher.Invoke(() => UpdateG2000Telemetry(snapshot));
+        var shouldSchedule = false;
+        lock (_g2000TelemetryUiSync)
+        {
+            _pendingG2000TelemetryUiSnapshot = snapshot.Clone();
+            if (!_g2000TelemetryUiUpdateScheduled)
+            {
+                _g2000TelemetryUiUpdateScheduled = true;
+                shouldSchedule = true;
+            }
+        }
+
+        if (shouldSchedule)
+        {
+            SchedulePendingG2000TelemetryUiUpdate();
+        }
+    }
+
+    private void SchedulePendingG2000TelemetryUiUpdate()
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            lock (_g2000TelemetryUiSync)
+            {
+                _pendingG2000TelemetryUiSnapshot = null;
+                _g2000TelemetryUiUpdateScheduled = false;
+            }
+
+            return;
+        }
+
+        try
+        {
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                new Action(ProcessPendingG2000TelemetryUiUpdate));
+        }
+        catch (InvalidOperationException)
+        {
+            lock (_g2000TelemetryUiSync)
+            {
+                _pendingG2000TelemetryUiSnapshot = null;
+                _g2000TelemetryUiUpdateScheduled = false;
+            }
+        }
+    }
+
+    private void ProcessPendingG2000TelemetryUiUpdate()
+    {
+        G2000TelemetrySnapshot? snapshot;
+        lock (_g2000TelemetryUiSync)
+        {
+            snapshot = _pendingG2000TelemetryUiSnapshot;
+            _pendingG2000TelemetryUiSnapshot = null;
+        }
+
+        if (snapshot is not null)
+        {
+            try
+            {
+                UpdateG2000Telemetry(snapshot);
+            }
+            catch (Exception ex)
+            {
+                _experimentRecorder?.RecordEvent("g2000", "ui-telemetry-update", "failed", ex.Message);
+            }
+        }
+
+        var scheduleAgain = false;
+        lock (_g2000TelemetryUiSync)
+        {
+            if (_pendingG2000TelemetryUiSnapshot is null)
+            {
+                _g2000TelemetryUiUpdateScheduled = false;
+            }
+            else
+            {
+                scheduleAgain = true;
+            }
+        }
+
+        if (scheduleAgain)
+        {
+            SchedulePendingG2000TelemetryUiUpdate();
+        }
     }
 
     private void UpdateG2000Telemetry(G2000TelemetrySnapshot snapshot)
     {
         _lastG2000Snapshot = snapshot.Clone();
+        if (snapshot.Connected && snapshot.CommunicationHealthy && snapshot.LastReceivedAt is not null)
+        {
+            _lastG2000ConnectionError = null;
+        }
+
         var settings = _settings;
         var isCanMode = settings.Relay.ResolveMode() == RelayControllerMode.G2000Can;
         G2000ConnectionText.Text = isCanMode
@@ -2433,11 +2684,21 @@ public partial class MainWindow : Window
         SaveSettingsButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing && !_isGasFlowActionBusy;
         ExportExperimentButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
         ExportExperimentMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
-        AdvancedSettingsMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        AdvancedSettingsMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing && _monitoringCts is null;
         GitLabUploadSettingsMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
         SelectRoiButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
         SelectRoiMenuItem.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
         G2000ControlPanel.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        EngineeringTab.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        TestRelayButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        TestRelayResetButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        TripAllEngineeringButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        RestoreAllEngineeringButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        foreach (var channel in _channelUis)
+        {
+            channel.OpenButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+            channel.CloseButton.IsEnabled = !_shutdownPreparing && !_isRunFinalizing;
+        }
     }
 
     private static async Task AwaitMonitoringTaskAsync(
@@ -2524,10 +2785,79 @@ public partial class MainWindow : Window
         UpdateG2000SettingsSummary();
     }
 
-    private async Task SaveSettingsFromUiAsync()
+    private async Task<bool> SaveSettingsFromUiAsync()
     {
-        _settings = BuildSettingsCandidateFromUi();
+        var candidateSettings = BuildSettingsCandidateFromUi();
+        if (_monitoringCts is not null)
+        {
+            if (!CanApplyCandidateDuringMonitoring(candidateSettings, showWarning: true))
+            {
+                return false;
+            }
+
+            if (!ValidateMonitoringSetup(candidateSettings))
+            {
+                _experimentRecorder?.RecordEvent(
+                    "settings",
+                    "validate-before-live-apply",
+                    "blocked",
+                    "The candidate setup did not pass validation; the existing monitoring loop and settings remain active.");
+                return false;
+            }
+        }
+
+        await ApplySettingsCandidateAtRuntimeBoundaryAsync(candidateSettings);
         await PersistCurrentSettingsAsync();
+        return true;
+    }
+
+    private async Task ApplySettingsCandidateAtRuntimeBoundaryAsync(AppSettings candidateSettings)
+    {
+        if (_monitoringCts is null)
+        {
+            Volatile.Write(ref _settings, candidateSettings);
+            return;
+        }
+
+        if (!CanApplyCandidateDuringMonitoring(candidateSettings, showWarning: false))
+        {
+            throw new InvalidOperationException(T("message.liveHardwareChangeBlocked"));
+        }
+
+        if (_monitoringService is null)
+        {
+            throw new InvalidOperationException(T("message.monitoringServiceUnavailable"));
+        }
+
+        await _monitoringService.ApplyRuntimeConfigurationAsync(
+            new InterlockSettings(candidateSettings.ThresholdC),
+            new AutoResetOptions(
+                candidateSettings.AutoResetEnabled,
+                candidateSettings.RecoveryThresholdC,
+                candidateSettings.RecoveryStableSeconds),
+            TimeSpan.FromMilliseconds(candidateSettings.PollIntervalMs),
+            () => Volatile.Write(ref _settings, candidateSettings),
+            CancellationToken.None);
+    }
+
+    private bool CanApplyCandidateDuringMonitoring(AppSettings candidateSettings, bool showWarning)
+    {
+        if (string.Equals(_relayRuntimeKey, CreateRelayRuntimeKey(candidateSettings.Relay), StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        _experimentRecorder?.RecordEvent(
+            "settings",
+            "apply-live",
+            "blocked",
+            "Relay or G2000 connection settings changed while monitoring was running; no candidate settings were applied.");
+        if (showWarning)
+        {
+            ShowSetupWarning(T("message.liveHardwareChangeBlocked"));
+        }
+
+        return false;
     }
 
     private AppSettings BuildSettingsCandidateFromUi()
@@ -2627,7 +2957,9 @@ public partial class MainWindow : Window
 
     private async Task SaveAmc2100SettingsFromUiAsync()
     {
-        _settings.Amc2100 = ReadAmc2100SettingsFromUi();
+        var candidateSettings = _settings.Clone();
+        candidateSettings.Amc2100 = ReadAmc2100SettingsFromUi();
+        Volatile.Write(ref _settings, candidateSettings);
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
         _experimentRecorder?.UpdateSettings(_settings);
         UpdateGasFlowDisplay();
@@ -2685,22 +3017,25 @@ public partial class MainWindow : Window
 
     private async Task SaveG2000SettingsFromUiAsync()
     {
-        _settings.Relay.G2000Can.WritableSetpoints.VoltageV = ParseDouble(G2000VoltageBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.VoltageV));
-        _settings.Relay.G2000Can.WritableSetpoints.FrequencyKhz = ParseDouble(G2000FrequencyBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.FrequencyKhz));
-        _settings.Relay.G2000Can.WritableSetpoints.DutyPercent = ParseDouble(G2000DutyBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.DutyPercent));
-        _settings.Relay.G2000Can.WritableSetpoints.TonMs = ParseDouble(G2000TonBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.TonMs));
-        _settings.Relay.G2000Can.WritableSetpoints.ToffMs = ParseDouble(G2000ToffBox.Text, nameof(_settings.Relay.G2000Can.WritableSetpoints.ToffMs));
-        _settings.Relay.G2000Can.StartupRecipe.Stage1VoltageV = ParseDouble(G2000Stage1VoltageBox.Text, nameof(_settings.Relay.G2000Can.StartupRecipe.Stage1VoltageV));
-        _settings.Relay.G2000Can.StartupRecipe.Stage1DurationMs = ParseInt(G2000Stage1DurationBox.Text, nameof(_settings.Relay.G2000Can.StartupRecipe.Stage1DurationMs));
-        _settings.Relay.G2000Can.StartupRecipe.Stage2VoltageV = ParseDouble(G2000Stage2VoltageBox.Text, nameof(_settings.Relay.G2000Can.StartupRecipe.Stage2VoltageV));
-        _settings.Relay.G2000Can.StartupRecipe.Stage2HoldEnabled = G2000Stage2HoldBox.IsChecked == true;
-        _settings.Relay.G2000Can.StartupRecipe.EnterHvReadyBeforeRun = G2000EnterHvReadyBox.IsChecked == true;
-        _settings.Relay.G2000Can.StartupRecipe.EnterHvOnAtStart = G2000EnterHvOnBox.IsChecked == true;
-        _settings.Relay.G2000Can.RecoveryPolicy = ((TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ?? TripRecoveryPolicy.HoldHvAus).ToString();
-        _settings.Relay.G2000Can.Normalize();
-        ValidateG2000U2SettingsForUi();
-        _settings.Relay.G2000Can.ValidateWritableSetpoints(_settings.Relay.G2000Can.WritableSetpoints);
-        _settings.Relay.G2000Can.ValidateStartupRecipe(_settings.Relay.G2000Can.StartupRecipe);
+        var candidateSettings = _settings.Clone();
+        var candidate = candidateSettings.Relay.G2000Can;
+        candidate.WritableSetpoints.VoltageV = ParseDouble(G2000VoltageBox.Text, nameof(candidate.WritableSetpoints.VoltageV));
+        candidate.WritableSetpoints.FrequencyKhz = ParseDouble(G2000FrequencyBox.Text, nameof(candidate.WritableSetpoints.FrequencyKhz));
+        candidate.WritableSetpoints.DutyPercent = ParseDouble(G2000DutyBox.Text, nameof(candidate.WritableSetpoints.DutyPercent));
+        candidate.WritableSetpoints.TonMs = ParseDouble(G2000TonBox.Text, nameof(candidate.WritableSetpoints.TonMs));
+        candidate.WritableSetpoints.ToffMs = ParseDouble(G2000ToffBox.Text, nameof(candidate.WritableSetpoints.ToffMs));
+        candidate.StartupRecipe.Stage1VoltageV = ParseDouble(G2000Stage1VoltageBox.Text, nameof(candidate.StartupRecipe.Stage1VoltageV));
+        candidate.StartupRecipe.Stage1DurationMs = ParseInt(G2000Stage1DurationBox.Text, nameof(candidate.StartupRecipe.Stage1DurationMs));
+        candidate.StartupRecipe.Stage2VoltageV = ParseDouble(G2000Stage2VoltageBox.Text, nameof(candidate.StartupRecipe.Stage2VoltageV));
+        candidate.StartupRecipe.Stage2HoldEnabled = G2000Stage2HoldBox.IsChecked == true;
+        candidate.StartupRecipe.EnterHvReadyBeforeRun = G2000EnterHvReadyBox.IsChecked == true;
+        candidate.StartupRecipe.EnterHvOnAtStart = G2000EnterHvOnBox.IsChecked == true;
+        candidate.RecoveryPolicy = ((TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ?? TripRecoveryPolicy.HoldHvAus).ToString();
+        candidate.Normalize();
+        ValidateG2000U2SettingsForUi(candidate);
+        candidate.ValidateWritableSetpoints(candidate.WritableSetpoints);
+        candidate.ValidateStartupRecipe(candidate.StartupRecipe);
+        Volatile.Write(ref _settings, candidateSettings);
         await _settingsStore.SaveAsync(_settings, CancellationToken.None);
         _experimentRecorder?.UpdateSettings(_settings);
         ApplyG2000RecoveryPolicyToController();
@@ -2744,7 +3079,9 @@ public partial class MainWindow : Window
 
         try
         {
-            _settings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? "en");
+            var candidateSettings = _settings.Clone();
+            candidateSettings.Language = NormalizeLanguage(LanguageBox.SelectedValue?.ToString() ?? "en");
+            Volatile.Write(ref _settings, candidateSettings);
             ApplyLanguage();
             await _settingsStore.SaveAsync(_settings, CancellationToken.None);
             _experimentRecorder?.UpdateSettings(_settings);
@@ -2844,7 +3181,9 @@ public partial class MainWindow : Window
     private void UpdateSelectedG2000RecoveryPolicySetting()
     {
         var policy = (TripRecoveryPolicy?)G2000RecoveryPolicyBox.SelectedValue ?? _settings.Relay.G2000Can.ResolveRecoveryPolicy();
-        _settings.Relay.G2000Can.RecoveryPolicy = policy.ToString();
+        var candidateSettings = _settings.Clone();
+        candidateSettings.Relay.G2000Can.RecoveryPolicy = policy.ToString();
+        Volatile.Write(ref _settings, candidateSettings);
     }
 
     private void ApplyG2000RecoveryPolicyToController()
@@ -3242,11 +3581,12 @@ public partial class MainWindow : Window
             ? null
             : string.Format(CultureInfo.InvariantCulture, T("tooltip.g2000TabReadOnly"), _settings?.Relay.Mode ?? "--");
         var physicalRelayAvailable = isCanMode && _settings is not null && !_settings.Relay.DryRun;
+        var engineeringControlsEnabled = !_shutdownPreparing && !_isRunFinalizing;
 
-        TestRelayButton.IsEnabled = true;
-        TestRelayResetButton.IsEnabled = true;
-        TripAllEngineeringButton.IsEnabled = true;
-        RestoreAllEngineeringButton.IsEnabled = true;
+        TestRelayButton.IsEnabled = engineeringControlsEnabled;
+        TestRelayResetButton.IsEnabled = engineeringControlsEnabled;
+        TripAllEngineeringButton.IsEnabled = engineeringControlsEnabled;
+        RestoreAllEngineeringButton.IsEnabled = engineeringControlsEnabled;
 
         var branchInterlockTooltip = BuildBranchInterlockTooltip(relayMode, _settings?.Relay.DryRun == true);
         TestRelayButton.ToolTip = branchInterlockTooltip;
@@ -3256,8 +3596,8 @@ public partial class MainWindow : Window
 
         foreach (var channel in _channelUis)
         {
-            channel.OpenButton.IsEnabled = true;
-            channel.CloseButton.IsEnabled = true;
+            channel.OpenButton.IsEnabled = engineeringControlsEnabled;
+            channel.CloseButton.IsEnabled = engineeringControlsEnabled;
             channel.OpenButton.ToolTip = branchInterlockTooltip;
             channel.CloseButton.ToolTip = branchInterlockTooltip;
         }

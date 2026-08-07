@@ -297,6 +297,52 @@ public sealed class G2000CanControllerAutomaticSequenceTests
     }
 
     [Fact]
+    public async Task UnknownCanFrameDoesNotMarkG2000CommunicationHealthy()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 0);
+        await controller.EnsureConnectedAsync(CancellationToken.None);
+
+        await controller.HandleIncomingMessageForTestAsync(0x555, new byte[8], CancellationToken.None);
+
+        Assert.True(controller.Snapshot.Connected);
+        Assert.False(controller.Snapshot.CommunicationHealthy);
+        Assert.Null(controller.Snapshot.LastReceivedAt);
+    }
+
+    [Fact]
+    public async Task InterlockFaultSendsHvAusBeforePublishingTrippedTelemetry()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 0);
+        await controller.StartAutomaticSequenceAsync(
+            new G2000StartupRecipe
+            {
+                EnterHvReadyBeforeRun = false,
+                EnterHvOnAtStart = true
+            },
+            CancellationToken.None);
+        byte[]? commandAtTripNotification = null;
+        controller.TelemetryUpdated += (_, snapshot) =>
+        {
+            if (snapshot.TripLatched && commandAtTripNotification is null)
+            {
+                commandAtTripNotification = bus.LastCommandData();
+            }
+        };
+
+        await controller.HandleIncomingMessageForTestAsync(
+            G2000CanProtocol.GetStatusId(0),
+            [0x03, 0x00, 0x03, G2000CanProtocol.ErrorCodeInterlock, 0x00, 0x00, 0x00, 0x00],
+            CancellationToken.None);
+
+        Assert.Equal(G2000CanProtocol.CreateCanBusStopData(), commandAtTripNotification);
+        Assert.Equal(G2000HvState.HvAus, controller.Snapshot.TargetHvState);
+    }
+
+    [Fact]
     public async Task IncomingReservedActualFrame_UpdatesReservedOutputTelemetry()
     {
         var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));

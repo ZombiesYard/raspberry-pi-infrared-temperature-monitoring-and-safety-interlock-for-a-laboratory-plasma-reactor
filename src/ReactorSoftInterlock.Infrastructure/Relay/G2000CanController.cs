@@ -516,12 +516,10 @@ public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG20
     {
         var shouldForceStop = false;
         var shouldAutoRecover = false;
+        var recognizedFrame = true;
         var now = _now();
         lock (_sync)
         {
-            _snapshot.LastReceivedAt = now;
-            _snapshot.CommunicationHealthy = true;
-
             switch (id)
             {
                 case var statusId when statusId == G2000CanProtocol.GetStatusId(_settings.NodeId):
@@ -593,13 +591,22 @@ public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG20
                     break;
                 }
                 default:
+                    recognizedFrame = false;
                     break;
             }
 
-            UpdateSnapshotLocked();
+            if (recognizedFrame)
+            {
+                _snapshot.LastReceivedAt = now;
+                _snapshot.CommunicationHealthy = true;
+                UpdateSnapshotLocked();
+            }
         }
 
-        PublishTelemetry();
+        if (!recognizedFrame)
+        {
+            return;
+        }
 
         if (shouldForceStop)
         {
@@ -608,6 +615,10 @@ public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG20
         else if (shouldAutoRecover)
         {
             await RecoverFromTripAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            PublishTelemetry();
         }
     }
 

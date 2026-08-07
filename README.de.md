@@ -63,7 +63,8 @@ Die aktuelle AMC2100-Logik in der Software ist:
 - Die AMC2100-Gasflusssteuerung bleibt von der Temperatur-Verriegelung unabhaengig.
 - Vor einem Hardware-Durchflussbefehl muss AMC2100 aktiviert sein; bei deaktivierter Steuerung wird der Befehl eindeutig blockiert.
 - Wenn AMC2100 aktiviert ist, schreibt `Einstellungen speichern` den angezeigten Ziel-Durchfluss in das Geraet.
-- Beim Speichern wird die vollstaendige neue Monitoring-Konfiguration geprueft, bevor ein aktives Monitoring angehalten wird. Danach werden Temperatur-/Recovery-Policy angewendet, AMC2100 unabhaengig geschrieben und zurueckgelesen und anschliessend die G2000-Verbindung bestaetigt. Fehler eines Teilsystems werden getrennt gemeldet und ueberspringen die anderen Teilsysteme nicht.
+- Bei aktivem Monitoring wechselt `Einstellungen speichern` Temperatur-, Recovery-, OCR/ROI-, Polling- und gespeicherte G2000/AMC2100-Werte an einer Messgrenze, weckt danach sofort eine Sicherheitsmessung und schreibt den aktivierten AMC2100-Zielwert separat. Monitoring-Schleife und Ausgangscontroller werden nicht gestoppt oder neu aufgebaut, G2000 wird nicht neu verbunden und die Plasma-Steuerung wird nicht unterbrochen. Aenderungen an Relais-/PCAN-Verbindungsdaten und erweiterten Relais-Einstellungen bleiben bis zum Ende des Plasma-Laufs und Stoppen des Monitorings blockiert.
+- G2000/PCAN wird erst nach Empfang eines aktuellen G2000-Telemetrierahmens bestaetigt; das blosse Oeffnen der PCAN-Schnittstelle reicht nicht. Fehlt nach dem Speichern Telemetrie, zuerst pruefen, ob G2000 eingeschaltet ist. G2000 einschalten und erneut versuchen; erst danach PCAN-Adapter, CAN-Kabel, Kanal und Treiber pruefen. AMC2100-Erfolg oder -Fehler wird unabhaengig gemeldet.
 - Die Tasten `-` / `+` aendern den Sollwert um 10 mL/min und schreiben ihn sofort, ohne zusaetzliches Speichern.
 - `Gasfluss stoppen` schreibt `0`; `Gas-Sollwert anwenden` schreibt den konfigurierten Zielwert.
 - Periodisches Lesen des Ist-Durchflusses und manuelle Schreibbefehle verwenden einen serialisierten Befehlspfad und konkurrieren nicht um denselben COM-Port.
@@ -370,9 +371,10 @@ Dry Run:
 - HikmicroAnalyzer nicht verschieben oder skalieren.
 - HikmicroAnalyzer nicht minimieren.
 - Temperaturtext nicht verdecken.
+- Temperatur-, Recovery-, OCR-, Rezept- und AMC2100-Werte koennen waehrend eines laufenden Experiments gespeichert werden; Monitoring-Task und G2000-Controller bleiben aktiv.
 - Bei unplausibler Temperatur `Raw OCR text` prüfen.
 - Die automatische HIKMICRO-Bildkalibrierung kann im Overlay kurz exakt `0 C` anzeigen. Exakt null wird als `NO READING` behandelt, setzt die Stabilzeit fuer die automatische Wiederfreigabe zurueck und kann einen ausgeloesten Interlock nicht selbst freigeben.
-- Jeder Tesseract-OCR-Unterprozess hat ein Timeout von 5 s; ein haengender Prozess wird beendet und als `NO READING` protokolliert, damit der naechste Polling-Zyklus weiterlaeuft.
+- HIKMICRO-Fensteraufnahme und jeder Tesseract-OCR-Unterprozess haben ein Timeout von 5 s. Ein haengender Tesseract-Prozess wird beendet; eine haengende Fensteraufnahme bleibt als einziger laufender Versuch isoliert, sodass keine weiteren Capture-Threads anwachsen. Beides wird als `NO READING` protokolliert; Stop oder Live-Speichern warten nicht mehr unbegrenzt auf `PrintWindow`.
 - Bei wiederholtem `NO READING` zuerst ROI/OCR korrigieren, bevor die Software weiter als Schutz verwendet wird.
 
 ## Nach einem Trip
@@ -499,7 +501,7 @@ Wichtige Felder:
 - `AutoResetEnabled`: Standard `true`.
 - `RecoveryThresholdC`: Standard `85.0`.
 - `RecoveryStableSeconds`: Standard `30`.
-- Beim Speichern neuer Temperatur-/Recovery-Einstellungen waehrend eines Trips bleibt die logische Trip-Verriegelung erhalten und es wird kein Reset gesendet. Muss der Ausgangscontroller ersetzt werden, wird der Stop-Befehl vor dem Neustart des Monitorings erneut gesendet. Die neue Stabilzeit beginnt erst bei einem gueltigen Temperaturwert unterhalb der neuen Recovery-Schwelle.
+- Beim Speichern neuer Temperatur-/Recovery-Einstellungen waehrend eines Trips wird die bestehende Zustandsmaschine live aktualisiert; die logische Trip-Verriegelung bleibt erhalten und es wird kein Reset gesendet. Die neue Stabilzeit beginnt erst bei einem gueltigen Temperaturwert unterhalb der neuen Recovery-Schwelle. Hardware-Verbindungsdaten werden bei aktivem Monitoring nicht live umgeschaltet.
 
 ## Entwicklertest
 
