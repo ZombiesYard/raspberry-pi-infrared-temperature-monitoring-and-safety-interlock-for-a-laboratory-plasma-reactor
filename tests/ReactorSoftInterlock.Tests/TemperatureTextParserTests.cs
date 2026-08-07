@@ -16,6 +16,18 @@ public sealed class TemperatureTextParserTests
         Assert.Equal(expected, _parser.ParseHighestTemperatureC(text));
     }
 
+    [Theory]
+    [InlineData(-50.0, true)]
+    [InlineData(300.0, true)]
+    [InlineData(-50.1, false)]
+    [InlineData(300.1, false)]
+    [InlineData(0.0, false)]
+    [InlineData(double.NaN, false)]
+    public void PlausibilityRangeMatchesConfigurableSafetyRange(double value, bool expected)
+    {
+        Assert.Equal(expected, TemperatureTextParser.IsPlausibleReading(value));
+    }
+
     [Fact]
     public void ReturnsNullWhenNoTemperatureIsVisible()
     {

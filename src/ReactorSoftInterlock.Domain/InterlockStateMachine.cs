@@ -4,7 +4,8 @@ public sealed class InterlockStateMachine
 {
     private readonly InterlockSettings _settings;
     private bool _isTripped;
-    private bool _stopAlreadySent;
+    private bool _stopConfirmed;
+    private double? _tripThresholdC;
 
     public InterlockStateMachine(InterlockSettings settings)
     {
@@ -17,11 +18,13 @@ public sealed class InterlockStateMachine
     {
         if (_isTripped)
         {
+            var tripThresholdC = _tripThresholdC ?? _settings.ThresholdC;
+            var shouldSendStop = !_stopConfirmed;
             return new InterlockDecision(
                 MonitorStatus.Tripped,
-                RelayAction.None,
-                $"Latched trip: temperature reached or exceeded {_settings.ThresholdC:0.0} C.",
-                ShouldSendStop: false);
+                shouldSendStop ? RelayAction.StopSent : RelayAction.None,
+                $"Latched trip: temperature reached or exceeded {tripThresholdC:0.0} C.",
+                ShouldSendStop: shouldSendStop);
         }
 
         if (temperatureC is null)
@@ -36,9 +39,9 @@ public sealed class InterlockStateMachine
         if (temperatureC.Value >= _settings.ThresholdC)
         {
             _isTripped = true;
-            if (!_stopAlreadySent)
+            _tripThresholdC = _settings.ThresholdC;
+            if (!_stopConfirmed)
             {
-                _stopAlreadySent = true;
                 return new InterlockDecision(
                     MonitorStatus.Tripped,
                     RelayAction.StopSent,
@@ -54,6 +57,34 @@ public sealed class InterlockStateMachine
             ShouldSendStop: false);
     }
 
+    public void ConfirmStopSent()
+    {
+        if (!_isTripped)
+        {
+            throw new InvalidOperationException("Cannot confirm a stop when no trip is latched.");
+        }
+
+        _stopConfirmed = true;
+    }
+
+    public void RequireStopConfirmation()
+    {
+        if (_isTripped)
+        {
+            _stopConfirmed = false;
+        }
+    }
+
+    public InterlockStateMachine Reconfigure(InterlockSettings settings)
+    {
+        return new InterlockStateMachine(settings)
+        {
+            _isTripped = _isTripped,
+            _stopConfirmed = _stopConfirmed,
+            _tripThresholdC = _tripThresholdC
+        };
+    }
+
     public bool CanReset(double? currentTemperatureC)
     {
         return _isTripped && currentTemperatureC is not null && currentTemperatureC.Value < _settings.ThresholdC;
@@ -67,6 +98,7 @@ public sealed class InterlockStateMachine
         }
 
         _isTripped = false;
-        _stopAlreadySent = false;
+        _stopConfirmed = false;
+        _tripThresholdC = null;
     }
 }

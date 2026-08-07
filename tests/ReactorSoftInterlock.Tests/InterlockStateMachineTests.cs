@@ -30,12 +30,26 @@ public sealed class InterlockStateMachineTests
     }
 
     [Fact]
-    public void StopCommandIsRequestedOnlyOnceWhileLatched()
+    public void StopCommandIsRequestedOnlyOnceAfterOutputConfirmsIt()
     {
         var machine = new InterlockStateMachine(new InterlockSettings(90.0));
 
         Assert.True(machine.Evaluate(90.0).ShouldSendStop);
+        machine.ConfirmStopSent();
         Assert.False(machine.Evaluate(95.0).ShouldSendStop);
+        Assert.False(machine.Evaluate(80.0).ShouldSendStop);
+    }
+
+    [Fact]
+    public void StopCommandIsRetriedUntilOutputConfirmsIt()
+    {
+        var machine = new InterlockStateMachine(new InterlockSettings(90.0));
+
+        Assert.True(machine.Evaluate(90.0).ShouldSendStop);
+        Assert.True(machine.Evaluate(80.0).ShouldSendStop);
+
+        machine.ConfirmStopSent();
+
         Assert.False(machine.Evaluate(80.0).ShouldSendStop);
     }
 
@@ -52,5 +66,34 @@ public sealed class InterlockStateMachineTests
         machine.Reset(89.9);
 
         Assert.False(machine.IsTripped);
+    }
+
+    [Fact]
+    public void ReconfigurePreservesUnconfirmedStopRequirement()
+    {
+        var machine = new InterlockStateMachine(new InterlockSettings(90.0));
+        Assert.True(machine.Evaluate(95.0).ShouldSendStop);
+
+        var reconfigured = machine.Reconfigure(new InterlockSettings(190.0));
+
+        Assert.True(reconfigured.Evaluate(80.0).ShouldSendStop);
+    }
+
+    [Fact]
+    public void ReconfigurePreservesLatchedTripWithoutRequestingSecondStop()
+    {
+        var machine = new InterlockStateMachine(new InterlockSettings(90.0));
+        Assert.True(machine.Evaluate(95.0).ShouldSendStop);
+        machine.ConfirmStopSent();
+
+        var reconfigured = machine.Reconfigure(new InterlockSettings(190.0));
+        var decision = reconfigured.Evaluate(100.0);
+
+        Assert.True(reconfigured.IsTripped);
+        Assert.Equal(MonitorStatus.Tripped, decision.Status);
+        Assert.False(decision.ShouldSendStop);
+        Assert.Equal(RelayAction.None, decision.RelayAction);
+        Assert.True(reconfigured.CanReset(100.0));
+        Assert.Contains("90.0", decision.AlarmReason);
     }
 }

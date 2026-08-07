@@ -7,6 +7,26 @@ namespace ReactorSoftInterlock.Tests;
 public sealed class G2000CanControllerAutomaticSequenceTests
 {
     [Fact]
+    public async Task AutomaticSequence_IsRejectedWhileHardwareFaultIsActive()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 8, 7, 14, 30, 0, TimeSpan.Zero));
+        var bus = new FakePcanBus();
+        using var controller = CreateController(bus, clock, hvReadyLeadTimeMs: 0);
+        await controller.EnsureConnectedAsync(CancellationToken.None);
+        await controller.HandleIncomingMessageForTestAsync(
+            G2000CanProtocol.GetStatusId(0),
+            [0x03, 0x00, 0x03, G2000CanProtocol.ErrorCodeInterlock, 0x00, 0x00, 0x00, 0x00],
+            CancellationToken.None);
+
+        var error = await Assert.ThrowsAsync<G2000AutomaticStartBlockedException>(() =>
+            controller.StartAutomaticSequenceAsync(new G2000StartupRecipe(), CancellationToken.None));
+
+        Assert.Contains("fault", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(G2000HvState.HvAus, controller.Snapshot.TargetHvState);
+        Assert.NotEqual(G2000UiMode.Automatic, controller.Snapshot.UiMode);
+    }
+
+    [Fact]
     public async Task AutomaticSequence_StartsStage1TimerAfterHvReadyLead()
     {
         var clock = new MutableClock(new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero));

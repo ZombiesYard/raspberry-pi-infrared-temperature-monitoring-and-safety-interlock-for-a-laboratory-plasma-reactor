@@ -348,6 +348,11 @@ public sealed class G2000CanController : IG2000Controller, IG2000TripLatch, IG20
 
         lock (_sync)
         {
+            if (_tripLatched || _snapshot.Fault)
+            {
+                throw new G2000AutomaticStartBlockedException();
+            }
+
             var now = _now();
             StartAutomaticSequenceLocked(recipe, now, clearTrip: true);
         }

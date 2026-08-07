@@ -5,6 +5,9 @@ namespace ReactorSoftInterlock.Application;
 
 public sealed class TemperatureTextParser
 {
+    public const double MinimumPlausibleTemperatureC = -50d;
+    public const double MaximumPlausibleTemperatureC = 300d;
+
     private static readonly Regex TemperaturePattern = new(
         @"(?<!\d)(?<value>-?\d{1,3}(?:[\.,]\d{1,2})?)\s*(?:°\s*)?[Cc](?![A-Za-z])?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -45,10 +48,10 @@ public sealed class TemperatureTextParser
         return double.Parse(value, CultureInfo.InvariantCulture);
     }
 
-    private static bool IsPlausibleReading(double value)
+    public static bool IsPlausibleReading(double value)
     {
         // HikmicroAnalyzer can briefly display exactly 0.0 during shutter calibration.
         // Treat that sentinel as no reading so it cannot advance automatic recovery.
-        return value is >= -50 and <= 300 && value != 0d;
+        return value is >= MinimumPlausibleTemperatureC and <= MaximumPlausibleTemperatureC && value != 0d;
     }
 }

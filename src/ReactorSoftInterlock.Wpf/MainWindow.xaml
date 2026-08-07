@@ -174,7 +174,7 @@
                         <ColumnDefinition Width="*" />
                       </Grid.ColumnDefinitions>
                       <StackPanel Grid.Column="0">
-                        <TextBlock x:Name="LanguageQuickLabel" Style="{StaticResource LabelStyle}" Text="Language" />
+                        <TextBlock x:Name="LanguageQuickLabel" Style="{StaticResource LabelStyle}" Text="Language / Sprache" />
                         <ComboBox x:Name="LanguageBox" Style="{StaticResource ComboStyle}" Margin="0" DisplayMemberPath="DisplayName" SelectedValuePath="Code" SelectionChanged="LanguageBox_SelectionChanged" />
                       </StackPanel>
                       <StackPanel Grid.Column="2">
@@ -204,7 +204,7 @@
                 </Border>
 
                 <Border Style="{StaticResource CardBorderStyle}">
-                  <StackPanel>
+                  <StackPanel x:Name="G2000ControlPanel">
                     <TextBlock x:Name="G2000RunControlTitle" Text="G2000 Run Control" Style="{StaticResource CardTitleStyle}" />
                     <TextBlock x:Name="G2000HighRiskText" Text="HV on high risk" Foreground="#B00020" FontWeight="SemiBold" Margin="0,0,0,10" />
 
