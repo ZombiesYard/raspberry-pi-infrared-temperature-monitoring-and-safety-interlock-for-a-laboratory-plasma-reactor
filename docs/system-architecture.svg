@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1050" viewBox="0 0 1800 1050" role="img" aria-labelledby="title description">
+  <title id="title">Laboratory plasma reactor monitoring and safety interlock architecture</title>
+  <desc id="description">The reactor is measured by a HIKMICRO camera. HikmicroAnalyzer, ROI capture, Tesseract, MonitoringService, and InterlockStateMachine form the temperature decision path. MonitoringService invokes a selected relay port. In G2000 CAN mode the hybrid adapter controls a physical normally closed interlock and bidirectional CAN. AMC2100 is independent. Experiment evidence is recorded and uploaded on a non-safety sidecar path.</desc>
+  <defs>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#64748b"/></marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#b85450"/></marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#628a4c"/></marker>
+    <marker id="arrow-yellow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#b48a13"/></marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#4f81bd"/></marker>
+    <style>
+      text{font-family:Segoe UI,Arial,sans-serif;fill:#0f172a}.title{font-size:28px;font-weight:700}.zone-title{font-size:18px;font-weight:700}.node-title{font-size:16px;font-weight:700}.node-sub{font-size:13px;fill:#475569}.legend{font-size:13px;fill:#475569}.edge-label{font-size:12px;fill:#475569;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}.note{font-size:13px;font-style:italic}.zone{stroke-width:1.6}.node{stroke-width:1.6}.safety{stroke-width:2.2}.edge{fill:none;stroke:#64748b;stroke-width:1.9;marker-end:url(#arrow-gray)}.edge-domain{fill:none;stroke:#b48a13;stroke-width:2.1;marker-end:url(#arrow-yellow)}.edge-red{fill:none;stroke:#b85450;stroke-width:2.5;marker-end:url(#arrow-red)}.edge-red-bidir{fill:none;stroke:#d79b00;stroke-width:2.5;marker-start:url(#arrow-red);marker-end:url(#arrow-red)}.edge-green{fill:none;stroke:#628a4c;stroke-width:2;marker-end:url(#arrow-green)}.edge-green-dashed{fill:none;stroke:#628a4c;stroke-width:2;stroke-dasharray:8 6;marker-end:url(#arrow-green)}.edge-blue{fill:none;stroke:#4f81bd;stroke-width:2;stroke-dasharray:8 6;marker-end:url(#arrow-blue)}
+    </style>
+  </defs>
+  <rect width="1800" height="1050" fill="#fff"/>
+  <text class="title" x="900" y="44" text-anchor="middle">Laboratory Plasma Reactor Temperature Monitoring and Safety Interlock</text>
+  <text class="legend" x="900" y="82" text-anchor="middle"><tspan font-weight="700">Layer tags:</tspan> WPF (blue) · Application (purple) · Domain (yellow) · Infrastructure (gray) · physical safety path (red/orange) · evidence only (blue dashed)</text>
+
+  <rect class="zone" x="480" y="105" width="820" height="650" rx="14" fill="#f8fafc" stroke="#64748b"/>
+  <text class="zone-title" x="890" y="134" text-anchor="middle">Windows application (.NET 8 WPF)</text>
+  <rect class="zone" x="1310" y="250" width="460" height="500" rx="14" fill="#fff4e6" stroke="#d79b00"/>
+  <text class="zone-title" x="1540" y="280" text-anchor="middle">Laboratory devices and physical safety path</text>
+  <rect class="zone" x="480" y="780" width="820" height="180" rx="14" fill="#e8f4f8" stroke="#4f81bd"/>
+  <text class="zone-title" x="890" y="811" text-anchor="middle">Non-safety evidence path</text>
+
+  <path class="edge-green-dashed" d="M1750 670 H1780 V115 H135 V160"/><text class="edge-label" x="1450" y="109">infrared measurement</text>
+  <path class="edge-green" d="M230 200 H270"/><text class="edge-label" x="250" y="190" text-anchor="middle">image</text>
+  <path class="edge-green" d="M460 200 H520"/><text class="edge-label" x="490" y="190" text-anchor="middle">ROI</text>
+  <path class="edge" d="M740 200 H800"/><text class="edge-label" x="770" y="190" text-anchor="middle">reading</text>
+  <path class="edge-domain" d="M1020 180 H1080"/><text class="edge-label" x="1027" y="170">Evaluate</text>
+  <path class="edge-domain" d="M1190 250 V290 H910 V250"/><text class="edge-label" x="996" y="284">InterlockDecision</text>
+  <path class="edge" d="M630 380 V330 H850 V250"/><text class="edge-label" x="650" y="323">start / stop / live settings</text>
+  <path class="edge-red" d="M910 250 V375"/><text class="edge-label" x="920" y="319">StopAsync / ResetAsync</text>
+  <path class="edge-red" d="M1020 420 H1080"/>
+  <path class="edge-red" d="M740 440 H760 V540 H1190 V470"/><text class="edge-label" x="900" y="533">Engineering / G2000 controls</text>
+  <path class="edge-green" d="M630 470 V670 H800"/><text class="edge-label" x="640" y="610">flow setpoint</text>
+  <path class="edge-red" d="M1300 395 H1320 V340 H1340"/><text class="edge-label" x="1332" y="328" text-anchor="end">USB serial</text>
+  <path class="edge-red" d="M1300 445 H1320 V495 H1340"/><text class="edge-label" x="1302" y="486">CAN</text>
+  <path class="edge-red" d="M1530 340 H1655 V385"/><text class="edge-label" x="1590" y="329">NC interlocks</text>
+  <path class="edge-red-bidir" d="M1530 495 H1655 V485"/><text class="edge-label" x="1740" y="520" text-anchor="end">commands ↔ telemetry</text>
+  <path class="edge-red" d="M1655 485 V625"/><text class="edge-label" x="1655" y="570" text-anchor="middle">high-voltage plasma</text>
+  <path class="edge-green" d="M1020 670 H1080"/><text class="edge-label" x="1050" y="660" text-anchor="middle">RS485</text>
+  <path class="edge-green" d="M1300 670 H1560"/><text class="edge-label" x="1410" y="660">gas flow</text>
+  <path class="edge-blue" d="M800 220 H770 V755 H630 V830"/><text class="edge-label" x="783" y="660" transform="rotate(-90 783 660)">samples + monitoring events</text>
+  <path class="edge-blue" d="M600 470 V830"/><text class="edge-label" x="612" y="746">device events + telemetry</text>
+  <path class="edge-blue" d="M740 875 H800"/><text class="edge-label" x="745" y="865">async write / package</text>
+  <path class="edge-blue" d="M1020 875 H1080"/><text class="edge-label" x="1034" y="865">outbox upload</text>
+
+  <rect class="node" x="40" y="160" width="190" height="80" rx="11" fill="#d5e8d4" stroke="#82b366"/><text class="node-title" x="135" y="193" text-anchor="middle">HIKMICRO E20Plus</text><text class="node-sub" x="135" y="217" text-anchor="middle">Infrared camera</text>
+  <rect class="node" x="270" y="160" width="190" height="80" rx="11" fill="#d5e8d4" stroke="#82b366"/><text class="node-title" x="365" y="193" text-anchor="middle">HikmicroAnalyzer</text><text class="node-sub" x="365" y="217" text-anchor="middle">Max temperature overlay</text>
+  <rect class="node" x="520" y="160" width="220" height="80" rx="11" fill="#f5f5f5" stroke="#666"/><text class="node-title" x="630" y="192" text-anchor="middle">ROI capture + Tesseract</text><text class="node-sub" x="630" y="216" text-anchor="middle">Infrastructure · ITemperatureReader</text>
+  <rect class="node" x="800" y="150" width="220" height="100" rx="11" fill="#e1d5e7" stroke="#9673a6"/><text class="node-title" x="910" y="190" text-anchor="middle">MonitoringService</text><text class="node-sub" x="910" y="216" text-anchor="middle">Application · poll and invoke ports</text>
+  <rect class="node" x="1080" y="150" width="220" height="100" rx="11" fill="#fff2cc" stroke="#d6b656"/><text class="node-title" x="1190" y="190" text-anchor="middle">InterlockStateMachine</text><text class="node-sub" x="1190" y="216" text-anchor="middle">Domain · threshold, latch, decision</text>
+  <rect class="node" x="520" y="380" width="220" height="90" rx="11" fill="#dae8fc" stroke="#6c8ebf"/><text class="node-title" x="630" y="416" text-anchor="middle">MainWindow + settings</text><text class="node-sub" x="630" y="442" text-anchor="middle">WPF · operator and device controls</text>
+  <rect class="node" x="800" y="375" width="220" height="90" rx="11" fill="#e1d5e7" stroke="#9673a6"/><text class="node-title" x="910" y="412" text-anchor="middle">IRelayController</text><text class="node-sub" x="910" y="438" text-anchor="middle">Application port · selected mode</text>
+  <rect class="node safety" x="1080" y="370" width="220" height="100" rx="11" fill="#f8cecc" stroke="#b85450"/><text class="node-title" x="1190" y="407" text-anchor="middle">Hybrid G2000 interlock</text><text class="node-sub" x="1190" y="433" text-anchor="middle">Infrastructure · software trip</text><text class="node-sub" x="1190" y="452" text-anchor="middle">CAN recovery · physical relay</text>
+  <rect class="node safety" x="1340" y="300" width="190" height="80" rx="11" fill="#f8cecc" stroke="#b85450"/><text class="node-title" x="1435" y="333" text-anchor="middle">DSD TECH SH-UR04A</text><text class="node-sub" x="1435" y="357" text-anchor="middle">4-channel USB relay</text>
+  <rect class="node" x="1340" y="455" width="190" height="80" rx="11" fill="#ffe6cc" stroke="#d79b00"/><text class="node-title" x="1435" y="488" text-anchor="middle">PCAN-USB</text><text class="node-sub" x="1435" y="512" text-anchor="middle">CAN adapter</text>
+  <rect class="node safety" x="1560" y="385" width="190" height="100" rx="11" fill="#f8cecc" stroke="#b85450"/><text class="node-title" x="1655" y="420" text-anchor="middle">G2000 plasma generator</text><text class="node-sub" x="1655" y="446" text-anchor="middle">CAN + normally closed</text><text class="node-sub" x="1655" y="465" text-anchor="middle">physical interlocks</text>
+  <rect class="node" x="1560" y="625" width="190" height="90" rx="11" fill="#fff2cc" stroke="#d6b656"/><text class="node-title" x="1655" y="662" text-anchor="middle">Plasma reactor</text><text class="node-sub" x="1655" y="688" text-anchor="middle">Monitored process</text>
+  <rect class="node" x="800" y="625" width="220" height="90" rx="11" fill="#f5f5f5" stroke="#666"/><text class="node-title" x="910" y="662" text-anchor="middle">AMC2100 controller</text><text class="node-sub" x="910" y="688" text-anchor="middle">Infrastructure · serialized Modbus</text>
+  <rect class="node" x="1080" y="625" width="220" height="90" rx="11" fill="#d5e8d4" stroke="#82b366"/><text class="node-title" x="1190" y="662" text-anchor="middle">AMC2100</text><text class="node-sub" x="1190" y="688" text-anchor="middle">Gas mass-flow controller</text>
+  <rect class="node" x="520" y="830" width="220" height="90" rx="11" fill="#dae8fc" stroke="#6c8ebf"/><text class="node-title" x="630" y="867" text-anchor="middle">Evidence coordinator</text><text class="node-sub" x="630" y="893" text-anchor="middle">Infrastructure · bounded sidecar</text>
+  <rect class="node" x="800" y="830" width="220" height="90" rx="24" fill="#dae8fc" stroke="#6c8ebf"/><text class="node-title" x="910" y="867" text-anchor="middle">Local run + outbox</text><text class="node-sub" x="910" y="893" text-anchor="middle">CSV · JSON · short ZIP</text>
+  <rect class="node" x="1080" y="830" width="220" height="90" rx="11" fill="#dae8fc" stroke="#6c8ebf"/><text class="node-title" x="1190" y="867" text-anchor="middle">GitLab Package Registry</text><text class="node-sub" x="1190" y="893" text-anchor="middle">Background upload + retry</text>
+
+  <text class="note" x="1540" y="782" text-anchor="middle" fill="#9f1239"><tspan x="1540" dy="0">Temperature Stop latches software state and opens the physical NC interlock;</tspan><tspan x="1540" dy="20">it does not explicitly send CAN HV Aus.</tspan></text>
+  <text class="note" x="900" y="1010" text-anchor="middle" fill="#475569">Blue dashed evidence paths are bounded sidecars and never participate in the interlock decision or Stop/Reset path.</text>
+</svg>
